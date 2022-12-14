@@ -4,6 +4,7 @@
 This repository provides an automated way to report New Relic ingest consumption and user costs, by business department, using aggregated account-based cost allocation.
 
 ![Data flow diagram](screenshots/nr-showback-data-flow-diagram.png)
+
 A single [terraform.tfvars](terraform.tfvars) file contains the definition of departments within a business, a customer’s prices for ingest and user consumption, and the ability to ignore certain groups. Applying the terraform via a wrapper script creates a synthetics script, secure credentials containing API keys, and an associated dashboard. Once every 24 hours, the synthetics script queries the New Relic GraphQL API for a customer’s organization and user management data structures. Based upon a model of hierarchical account based cost allocation, showback data is posted into NRDB as metrics, and user data as custom events. To view the showback data, customers access a dashboard that is built, and kept in sync with the departmental definitions, by terraform configuration.
 
 ![Example dashboard](screenshots/nr-showback-dashboard.png)
