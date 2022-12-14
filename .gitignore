@@ -1,0 +1,5 @@
+runtf.sh
+runtf-*.sh
+.DS_Store
+.terraform*
+terraform*
