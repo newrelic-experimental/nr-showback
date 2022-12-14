@@ -1,0 +1,16 @@
+#!/bin/bash
+
+## RENAME THIS FILE runtf.sh and make sure it's executable! Don't check it into Git (it's in .gitignore)
+
+export NEW_RELIC_ACCOUNT_ID="0"  # Account id for creating the terraform resources
+export NEW_RELIC_API_KEY="NRAK-xxx"  # A User API Key for creating the terraform resources. This may or may not be different from the TF_VAR_showback_user_api_key
+export TF_VAR_new_relic_region="US"  # Your New Relic region ["US" | "EU"]
+export TF_VAR_showback_query_account_id="0"  # Query account 
+export TF_VAR_showback_query_user_api_key="NRAK-xxx"  # A User API Key. This user must have a user type of Full or Core and be a member of a group with Organization and Authentication Administration settings enabled (https://docs.newrelic.com/docs/accounts/accounts-billing/new-relic-one-user-management/user-management-concepts#admin-settings)
+export TF_VAR_showback_insert_account_id="0"  # The account id for the reporting account
+export TF_VAR_showback_insert_license_api_key="xxxNRAL"  # An Ingest API key for the reporting account 
+
+export TF_VAR_monitor_name="NR Showback reporting script"  # The name of the showback reporting script on the reporting account
+export TF_VAR_dashboard_name="NR Showback reporting"  # The name of the showback dashboard on the reporting account
+
+bash -c "terraform $1 $2"

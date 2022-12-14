@@ -1,0 +1,1046 @@
+const IS_LOCAL_ENV = typeof $env === "undefined" || $env === null;
+
+// TODO: Comment the following line to log debug messages
+console.log = function() {}
+
+/**
+ * For local development
+ */
+if (IS_LOCAL_ENV) {
+  global._isApiTest = true;
+  require("../lib/simulator");
+}
+
+const region = '${NEW_RELIC_REGION}';  // 'US' | 'EU'
+if (region === 'US') {
+  var nerdGraphEndpoint = 'https://api.newrelic.com/graphql';
+  var eventApiEndpoint = 'https://insights-collector.newrelic.com';
+  var metricApiEndpoint = 'https://metric-api.newrelic.com/metric/v1';
+} else if (region === 'EU') {
+  var nerdGraphEndpoint = 'https://api.eu.newrelic.com/graphql';
+  var eventApiEndpoint = 'https://insights-collector.eu01.nr-data.net';
+  var metricApiEndpoint = 'https://metric-api.eu.newrelic.com/metric/v1';
+  
+} else { // default to US
+  var nerdGraphEndpoint = 'https://api.newrelic.com/graphql';
+  var eventApiEndpoint = 'https://insights-collector.newrelic.com';
+  var metricApiEndpoint = 'https://metric-api.newrelic.com/metric/v1';
+}
+
+// Account details, during local development
+if (IS_LOCAL_ENV) {
+  const credentialsConfig = require('./credentials-config.json');
+  var $secure = new Object();
+  $secure.SHOWBACK_INSERT_LICENSE_API_KEY = credentialsConfig.ingestLicenseApiKey;
+  $secure.SHOWBACK_QUERY_USER_API_KEY = credentialsConfig.userApiKey;
+}
+
+// Event constants
+const ACCOUNT_USERS_DATA_TYPE_NAME = "Showback_AccountUsers";
+const UNIQUE_USERS_DATA_TYPE_NAME = "Showback_UniqueUsers";
+const DEPARTMENT_ATTRIBUTE_NAME = "departmentName";
+const DEPARTMENT_UNASSIGNED = "Unassigned"
+const FULL_USER_COUNT_ATTRIBUTE_NAME = "fullUserCount";
+const CORE_USER_COUNT_ATTRIBUTE_NAME = "coreUserCount";
+const BASIC_USER_COUNT_ATTRIBUTE_NAME = "basicUserCount";
+const TOTAL_USER_COUNT_ATTRIBUTE_NAME = "totalUserCount";
+const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${SHOWBACK_INSERT_ACCOUNT_ID};  // TODO: Update with reporting account id
+
+const CHUNK_SIZE = 100;
+
+
+/**
+ * Process showback (https://en.wikipedia.org/wiki/IT_chargeback_and_showback) for an organization, as associated with the supplied user api key. 
+ * @returns {Promise} indicating successful completion of the function.
+ */
+async function processShowback() {
+  // Get org accounts
+  let managedAccountsArray = await getOrgAccounts();
+  console.log('processShowback(): managedAccountsArray:', managedAccountsArray);
+
+  // Build a map of account ids to account names
+  let accountIdToNameMap = new Map();
+  for (const account of managedAccountsArray) {
+    accountIdToNameMap.set(account.id, account.name);
+  }
+
+  // Get an array of auth domains for the organization
+  let authDomainsArray = await getAuthDomainsArray();
+  console.log('processShowback(): authDomainsArray:', authDomainsArray);
+
+  // Get a map of auth domains to their groups
+  let authDomainToGroupsMap = await getAuthDomainToGroupsMap(authDomainsArray);
+  console.log('processShowback(): authDomainToGroupsMap:', authDomainToGroupsMap);
+
+  // Get a map of groups by id to their roles
+  let groupIdToRolesMap = await getGroupIdToRolesMap(authDomainToGroupsMap); // Contains group:account relationships 
+  console.log('processShowback(): groupToRolesMap:', groupIdToRolesMap);
+
+  // Get a map of users by email to their user details, which contains reference to roles
+  let emailToUserMap = await getEmailToUserMap(authDomainsArray); // Contains user:groups relationships
+  console.log('processShowback(): emailToUserMap:', emailToUserMap);
+
+  // Build a map of users by email to their accounts
+  let emailToAccountsMap = buildEmailToAccountsMap(emailToUserMap, groupIdToRolesMap, accountIdToNameMap);
+
+  // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
+  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserMap);
+
+  // Build a map of accounts, by id, to their users
+  let accountIdToUsersMap = buildAccountToUsersMap(emailToUserMap, groupIdToRolesMap, accountIdToNameMap);
+
+  // Get the current time
+  const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
+
+  // Create showback.department and aggregated showback.organization metrics in NRDB
+  postDepartmentShowback(departmentToUserTypeCountsMap, currentTimestamp);
+
+  // Create Showback_AccountUsers in NRDB
+  let accountUsersArray = postAccountUsers(emailToUserMap, groupIdToRolesMap, accountIdToNameMap);
+
+  // Create showback.account metrics in NRDB
+  postAccounts(accountIdToUsersMap, accountIdToNameMap, currentTimestamp);
+
+  // Build a UniqueUsersArray
+  let uniqueUsersArray = buildUniqueUsersArray(emailToUserMap, emailToDepartmentSetMap);
+
+  // Create Showback_UniqueUsers in NRDB
+  postUniqueUsers(uniqueUsersArray);
+
+  return "Success";
+}
+
+
+/**
+ * Gets the department/cost-center/business-unit to which user on the account with Full platform access or Core should be assigned.
+ * @param {*} accountName an account name to be mapped to a department. 
+ * @returns the department to be assigned.
+ */
+ function getDepartment(accountName) {
+  let department = DEPARTMENT_UNASSIGNED;
+  ${SHOWBACK_SWITCH_STATEMENT}
+  if (department === DEPARTMENT_UNASSIGNED) console.error("getDepartment(): The department of account", accountName, 'is unassigned');
+  return department;
+}
+
+
+/**
+ * Build a UniqueUsersArray.
+ * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} emailToDepartmentSetMap a map of user email to their departments.
+ * @returns a UniqueUsersArray.
+ */
+function buildUniqueUsersArray(emailToUserMap, emailToDepartmentSetMap) {
+  let uniqueUsersArray = [];
+  for (const [email, user] of emailToUserMap) {
+    let lastAccess = new Date(user.lastActive).getTime();
+    let userTierName;
+    if (user.type.displayName == 'Full platform') {
+      userTierName = 'FSO';
+    } else if (user.type.displayName == 'Basic') {
+      userTierName = 'Basic';
+    } else {
+      userTierName = 'Core';
+    }
+    let uniqueUser = {
+      email: user.email,
+      full_name: user.name,
+      last_access_at: lastAccess,
+      last_access_date: (lastAccess / 86400) + 25569,
+      departmentSet: JSON.stringify(Array.from(emailToDepartmentSetMap.get(email).values())),
+      user_id: Number(user.id),
+      user_tier_id: Number(user.type.id),
+      user_tier_name: userTierName,
+      eventType: UNIQUE_USERS_DATA_TYPE_NAME
+    };
+    uniqueUsersArray.push(uniqueUser);
+  };
+
+  return uniqueUsersArray;
+}
+
+
+/**
+ * Post a set of unique users to the Showback_UniqueUsers data type in NRDB.
+ * @param {*} uniqueUsersArray an array of unique users.
+ */
+function postUniqueUsers(uniqueUsersArray) {
+  // Chunk and post array
+  chunkAndPostCustomEvents(uniqueUsersArray);
+}
+
+
+/**
+ * Function to chunk the posting of custom events through the New Relic Event API.
+ * @param {*} array an array of events to be posted in chunks.
+ */
+function chunkAndPostCustomEvents(array) {
+  let chunkedArray = [];
+  Array.from({
+    length: Math.ceil(array.length / CHUNK_SIZE)
+  }, (val, i) => {
+    chunkedArray.push(array.slice(i * CHUNK_SIZE, i * CHUNK_SIZE + CHUNK_SIZE));
+  });
+  // Send to the Event API
+  chunkedArray.forEach(chunk => {
+    let body = JSON.stringify(chunk, null, 2);
+    postCustomEvents(body);
+  });
+}
+
+
+/**
+ * Function to chunk the posting of dimensional metrics through the New Relic Metric API.
+ * @param {*} array an array of data to be posted in chunks.
+ */
+ function chunkAndPostMetrics(array) {
+  // Break out array into dimensional metrics
+  let chunkedArray = [];
+  Array.from({
+    length: Math.ceil(array.length / CHUNK_SIZE)
+  }, (val, i) => {
+    chunkedArray.push(array.slice(i * CHUNK_SIZE, i * CHUNK_SIZE + CHUNK_SIZE));
+  });
+  // Send to the Event API
+  chunkedArray.forEach(chunk => {
+    const metricsPayload = [{
+      "metrics": chunk
+    }];
+    let body = JSON.stringify(metricsPayload, null, 2);
+    postMetrics(body);
+  });
+}
+
+
+/**
+ * List an organization's accounts.
+ * 
+ * @returns {Promise} a list of the accounts in the organization.
+ */
+async function getOrgAccounts() {
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: `query
+        {
+          actor {
+            organization {
+              accountManagement {
+                managedAccounts {
+                  name
+                  id
+                  regionCode
+                }
+              }
+            }
+          }
+        }
+      `
+    }),
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  };
+
+  try {
+    let response = await $http.post(options);
+    let managedAccounts = JSON.parse(response.body).data.actor.organization.accountManagement.managedAccounts;
+    return managedAccounts;
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+
+/**
+ * Post a set of account users to the Showback_AccountUsers data type in NRDB.
+ * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} groupIdToRolesMap a map of groups by id to their roles.
+ * @param {*} accountIdToNameMap a map of account ids to account names.
+ * @returns an array of account users. 
+ */
+function postAccountUsers(emailToUserMap, groupIdToRolesMap, accountIdToNameMap) {
+  let accountUsersArray = [];
+  for (const [email, user] of emailToUserMap) {
+    for (const group of user.groups.groups) {
+      if (groupIdToRolesMap.get(group.id)) {
+        let lastAccess = new Date(user.lastActive).getTime();
+        let userTierName;
+        if (user.type.displayName == 'Full platform') {
+          userTierName = 'FSO';
+        } else if (user.type.displayName == 'Basic') {
+          userTierName = 'Basic';
+        } else {
+          userTierName = 'Core';
+        }
+
+        for (const role of groupIdToRolesMap.get(group.id)) {
+          let accountUserObject = {
+            account_id: role.accountId,
+            account_name: accountIdToNameMap.get(role.accountId),
+            // parent_account_id: activeAccountsMap.get(grant.grantedOn.name).parent_account_id,  // No longer available in V2
+            email: user.email,
+            full_name: user.name,
+            group_id: group.id,
+            group_name: group.displayName,
+            last_access_at: lastAccess,
+            last_access_date: (lastAccess / 86400) + 25569,
+            user_id: Number(user.id),
+            user_tier_id: Number(user.type.id),
+            user_tier_name: userTierName,
+            user_role: role.displayName,
+            eventType: ACCOUNT_USERS_DATA_TYPE_NAME
+          };
+          accountUsersArray.push(accountUserObject);
+        }
+      } else {
+        console.error('postAccountUsers(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+      }
+    }
+  };
+
+  // Chunk and post array
+  chunkAndPostCustomEvents(accountUsersArray);
+  return accountUsersArray;
+}
+
+
+/**
+ * Build a map of users (by email) to their accounts. 
+ * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} groupIdToRolesMap a map of groups by id to their roles.
+ * @param {*} accountIdToNameMap a map of account ids to account names.
+ * @returns a map of users (by email) to their accounts.
+ */
+function buildEmailToAccountsMap(emailToUserMap, groupIdToRolesMap, accountIdToNameMap) {
+  let emailToAccountsMap = new Map();
+  let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
+  for (const [email, user] of emailToUserMap) {
+    let accountSet = new Set();
+    for (const group of user.groups.groups) {
+      // Check whether to ignore the group, continue if it is to be ignored
+      if (ignoredGroups.includes(group.displayName)) {
+        continue;
+      }
+      if (groupIdToRolesMap.has(group.id)) {
+        let roles = groupIdToRolesMap.get(group.id);
+        for (const role of roles) {
+          if (role.accountId) {
+            let accountName = accountIdToNameMap.get(role.accountId);
+            accountSet.add(accountName);
+          } else if (role.organizationId) {
+            console.log('buildEmailToAccountsMap(): Role associated with an organization, not account', role);
+          } else {
+            console.error('buildEmailToAccountsMap(): Role not associated with either an account or organization', role);
+          }
+        }
+      } else {
+        console.error('buildEmailToAccountsMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+      }
+    }
+    emailToAccountsMap.set(email, accountSet);
+  }
+  return emailToAccountsMap;
+}
+
+
+/**
+ * Build a map of accounts, by id, to their users. 
+ * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} groupIdToRolesMap a map of groups by id to their roles.
+ * @returns a map of accounts, by id, to their users.
+ */
+ function buildAccountToUsersMap(emailToUserMap, groupIdToRolesMap) {
+  let accountIdToUsersMap = new Map();
+  let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
+  for (const [email, user] of emailToUserMap) {
+    let userSet = new Set();
+    for (const group of user.groups.groups) {
+      // Check whether to ignore the group, continue if it is to be ignored
+      if (ignoredGroups.includes(group.displayName)) {
+        continue;
+      }
+      if (groupIdToRolesMap.has(group.id)) {
+        let roles = groupIdToRolesMap.get(group.id);
+        for (const role of roles) {
+          if (role.accountId) {
+            if (accountIdToUsersMap.has(role.accountId)) {
+              accountIdToUsersMap.get(role.accountId).add(user);
+            } else {
+              accountIdToUsersMap.set(role.accountId, new Set([user]));
+            }
+          } else if (role.organizationId) {
+            console.log('buildAccountToUsersMap(): Role associated with an organization, not account', role);
+          } else {
+            console.error('buildAccountToUsersMap(): Role not associated with either an account or organization', role);
+          }
+        }
+      } else {
+        console.error('buildAccountToUsersMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+      }
+    }
+  }
+  return accountIdToUsersMap;
+}
+
+
+/**
+ * Build a map of departments to their user type counts.
+ * @param {*} emailToAccountsMap a map of users (by email) to their accounts.
+ * @param {*} emailToUserMap a map of users by email to their user details.
+ * @returns a map of departments to their user type counts, and a map of user to departments.
+ */
+function buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserMap) {
+  let departmentToUserTypeCountsMap = new Map();
+  let emailToDepartmentSetMap = new Map();
+  let ignoreNewRelicUsers = ${SHOWBACK_IGNORE_NEWRELIC_USERS};
+  for (const [email, accountSet] of emailToAccountsMap) {
+    let departmentSet = new Set();
+    for (const account of accountSet) {
+      let department = getDepartment(account);
+      departmentSet.add(department);
+    }
+    if (departmentSet.size == 0) {
+      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user", email);
+      departmentSet.add(DEPARTMENT_UNASSIGNED);
+    }
+    emailToDepartmentSetMap.set(email, departmentSet);
+
+    // Skip / ignore new relic users for showback reporting by department
+    if (ignoreNewRelicUsers) {
+      if ((/@newrelic.com/).test(email)) {
+        console.debug("Ignoring user for showback reporting by department:", email);
+        continue;
+      }
+    }
+
+    // Apportion the user to each department they are a member of proportionally,
+    // e.g. if the user is a full_platform user and in two departments,
+    // add 0.5 of a full_platform user to each department.
+    let proportion = 1/departmentSet.size;
+    if (proportion < 1) {
+      // The user is a member of accounts under two or more different departments, so split equally
+      console.log("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments:", departmentSet, "apportioning equally across each department");
+    }
+
+    // Initialize, or update, an existing department's userCount
+    let user = emailToUserMap.get(email);
+    let userType = user.type;
+    user.departmentSet = departmentSet;
+    for (const department of departmentSet) {
+      if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
+        let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
+        if (userType.displayName === 'Full platform') {
+          userTypeCountsObject.full_platform += proportion;
+        } else if (userType.displayName === 'Core') {
+          userTypeCountsObject.core += proportion;
+        } else if (userType.displayName === 'Basic') {
+          userTypeCountsObject.basic += proportion;
+        } else {
+          console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+        }
+      } else {  // Initialize the user type counts for the department, and create the map entry
+        let userTypeCountsObject = {
+          full_platform: userType.displayName === 'Full platform' ? proportion : 0,
+          core: userType.displayName === 'Core' ? proportion : 0,
+          basic: userType.displayName === 'Basic' ? proportion : 0
+        };
+        departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
+      }
+    }
+  }
+
+  return { departmentToUserTypeCountsMap, emailToDepartmentSetMap };
+}
+
+
+/**
+ * Post a set of departments to NRDB.
+ * @param {*} departmentToUserTypeCountsMap a map of departments to their user type counts.
+ * @param {*} timestamp the metric timestamp.
+ * @returns an array of departments and their counts of full platform, core and basic users.
+ */
+function postDepartmentShowback(departmentToUserTypeCountsMap, timestamp) {
+  let departmentArray = Array.from(departmentToUserTypeCountsMap, ([department, userTypesCountObject]) => ({
+    [DEPARTMENT_ATTRIBUTE_NAME]: department,
+    [FULL_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.full_platform,
+    [CORE_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.core,
+    [BASIC_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.basic,
+    [TOTAL_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.basic + userTypesCountObject.core + userTypesCountObject.full_platform
+  }));
+
+  /*
+   * Dimensional metrics
+   */
+  let metrics = new Array();
+  let totalBasicUserCount = 0, totalCoreUserCount = 0, totalFullUserCount = 0, totalUserCount = 0;
+  // By department metrics
+  for (const [department, userTypeCountsObject] of departmentToUserTypeCountsMap) {
+    let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department });
+    metrics.push(basicUserDeptMetric);
+    totalBasicUserCount += userTypeCountsObject.basic;
+
+    let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department });
+    metrics.push(coreUserDeptMetric);
+    totalCoreUserCount += userTypeCountsObject.core;
+
+    let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department });
+    metrics.push(fullUserDeptMetric);
+    totalFullUserCount += userTypeCountsObject.full_platform;
+
+    let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
+    let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department });
+    metrics.push(totalUserDeptMetric);
+    totalUserCount += totalUserDeptCount;
+  }
+  // Aggregates metrics
+  let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", totalBasicUserCount, timestamp, {});
+  metrics.push(totalBasicUserMetric);
+  let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", totalCoreUserCount, timestamp, {});
+  metrics.push(totalCoreUserMetric);
+  let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", totalFullUserCount, timestamp, {});
+  metrics.push(totalFullUserMetric);
+  let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", totalUserCount, timestamp, {});
+  metrics.push(totalUserMetric);
+  chunkAndPostMetrics(metrics);
+  
+  return departmentArray;
+}
+
+
+/**
+ * Get a dimensional metric object for inclusion in a call to the New Relic Metrics API endpoint.
+ * @param {*} name the metric name.
+ * @param {*} type the metric type, e.g. gauge.
+ * @param {*} value the metric value.
+ * @param {*} timestamp the metric timestamp.
+ * @param {*} attributes an object containing the metric attributes.
+ * @returns a dimensional metric object.
+ */
+function getDimensionalMetricObject(name, type, value, timestamp, attributes) {
+  return {
+    "name": name,
+    "type": type,
+    "value": value,
+    "timestamp": timestamp,
+    "attributes": attributes
+  };
+}
+
+
+/**
+ * Post a set of accounts to NRDB, along with assigned user counts by user type.
+ * @param {*} accountToUsersMap a map of accounts to their users.
+ * @param {*} accountIdToNameMap a map of account ids to account names.
+ *  * @param {*} timestamp the metric timestamp.
+ * @returns an array of accounts.
+ */
+function postAccounts(accountToUsersMap, accountIdToNameMap, timestamp) {
+  let accountArray = [];
+  for (const [accountId, users] of accountToUsersMap) {
+    let basicUserCount = 0, coreUserCount = 0, fullUserCount = 0;
+    for (const user of users) {
+      let userType = user.type;
+      if (userType.displayName === 'Full platform') {
+        fullUserCount++;
+      } else if (userType.displayName === 'Core') {
+        coreUserCount++;
+      } else if (userType.displayName === 'Basic') {
+        basicUserCount++;
+      } else {
+        console.error('postAccounts(): Unknown user type:', userType)
+      }
+    }
+    accountArray.push(
+      {
+        "account_id": accountId,
+        "account_name": accountIdToNameMap.get(accountId),
+        [BASIC_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount,
+        [CORE_USER_COUNT_ATTRIBUTE_NAME]: coreUserCount,
+        [FULL_USER_COUNT_ATTRIBUTE_NAME]: fullUserCount,
+        [TOTAL_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount + coreUserCount + fullUserCount
+      }  
+    )
+  }
+
+  /*
+   * Dimensional metrics
+   */
+  let metrics = new Array();
+  // By account metrics
+  for (const account of accountArray) {
+    let basicUserAccountMetric = getDimensionalMetricObject("showback.account.basicuser.count", "gauge", account[BASIC_USER_COUNT_ATTRIBUTE_NAME], timestamp, { "account": account.account_name, "account_id": account.account_id });
+    metrics.push(basicUserAccountMetric);
+
+    let coreUserAccountMetric = getDimensionalMetricObject("showback.account.coreuser.count", "gauge", account[CORE_USER_COUNT_ATTRIBUTE_NAME], timestamp,  { "account": account.account_name, "account_id": account.account_id });
+    metrics.push(coreUserAccountMetric);
+
+    let fullUserAccountMetric = getDimensionalMetricObject("showback.account.fulluser.count", "gauge", account[FULL_USER_COUNT_ATTRIBUTE_NAME], timestamp,  { "account": account.account_name, "account_id": account.account_id });
+    metrics.push(fullUserAccountMetric);
+
+    let totalUserAccountCount = account[BASIC_USER_COUNT_ATTRIBUTE_NAME] + account[CORE_USER_COUNT_ATTRIBUTE_NAME] + account[FULL_USER_COUNT_ATTRIBUTE_NAME];
+    let totalUserAccountMetric = getDimensionalMetricObject("showback.account.totaluser.count", "gauge", totalUserAccountCount, timestamp,  { "account": account.account_name, "account_id": account.account_id });
+    metrics.push(totalUserAccountMetric);
+  }
+  chunkAndPostMetrics(metrics);
+
+  return accountArray;
+}
+
+
+/**
+ * Function to post custom events through the New Relic Event API.
+ * 
+ * @param {*} accountId the reporting account id.
+ * @param {*} body a JSON object with events in the New Relic Event API format.
+ * @returns {Promise<request.Response>} the response from the Event API endpoint.
+ */
+async function postCustomEvents(body) {
+  let options = {
+    url: eventApiEndpoint + '/v1/accounts/' + SHOWBACK_REPORTING_INSERT_ACCOUNT_ID + '/events',
+    body: body,
+    headers: {
+      'Api-Key': $secure.SHOWBACK_INSERT_LICENSE_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  }
+  try {
+    return await $http.post(options);
+  } catch (e) {
+    console.error('postCustomEvents():', e);
+  }
+}
+
+
+/**
+ * Function to post metrics through the New Relic Metrics API.
+ * 
+ * @param {*} accountId the reporting account id.
+ * @param {*} body a JSON object with metrics in the New Relic Metric API format.
+ * @returns {Promise<request.Response>} the response from the Metric API endpoint.
+ */
+ async function postMetrics(body) {
+  let options = {
+    url: metricApiEndpoint,
+    body: body,
+    headers: {
+      'Api-Key': $secure.SHOWBACK_INSERT_LICENSE_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  }
+  try {
+    return await $http.post(options);
+  } catch (e) {
+    console.error('postMetrics():', e);
+  }
+}
+
+
+/**
+ * Get a map of auth domains to their groups.
+ * @param {*} authDomainsArray an array of auth domains.
+ * @returns a map of auth domains to their groups.
+ */
+async function getAuthDomainToGroupsMap(authDomainsArray) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $groupsCursor: String) {
+        actor {
+          organization {
+            authorizationManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  groups(cursor: $groupsCursor) {
+                    groups {
+                      displayName
+                      id
+                    }
+                    nextCursor
+                  }
+                  id
+                  name
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: {
+      "authDomainId": null,
+      "groupsCursor": null
+    }
+  }
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  };
+
+  try {
+    let authDomainToGroupsMap = new Map();
+    for (const authDomain of authDomainsArray) {
+      let groups = [];
+      do {
+        body.variables.authDomainId = authDomain.id;
+        options.body = JSON.stringify(body);
+        let response = await $http.post(options);
+        let responseBody = JSON.parse(response.body);
+        groups = groups.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups);
+        body.variables.groupsCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.nextCursor;
+        options.body = JSON.stringify(body);
+      } while (body.variables.groupsCursor)
+      // Set the groups for the auth domain
+      authDomainToGroupsMap.set(authDomain.id, groups);
+    };
+    return authDomainToGroupsMap;
+  } catch (error) {
+    console.error('getAuthDomainToGroupsMap():', error);
+  }
+}
+
+
+/**
+ * Get an array of auth domains for the organization.
+ * @returns an array of auth domains.
+ */
+async function getAuthDomainsArray() {
+  const body = {
+    query: `
+      query ($authDomainCursor: String) {
+        actor {
+          organization {
+            authorizationManagement {
+              authenticationDomains(cursor: $authDomainCursor) {
+                authenticationDomains {
+                  id
+                  name
+                }
+                nextCursor
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: {
+      "authDomainCursor": null
+    }
+  }
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  };
+
+  try {
+    let authDomains = [];
+    do {
+      let response = await $http.post(options);
+      let responseBody = JSON.parse(response.body);
+      authDomains = authDomains.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains);
+      body.variables.authDomainCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.nextCursor;
+      options.body = JSON.stringify(body);
+    } while (body.variables.authDomainCursor)
+    return authDomains;
+  } catch (error) {
+    console.error('getAuthDomainsArray():', error);
+  }
+}
+
+
+/**
+ * Get a map of groups by id to their roles
+ * @param {*} authDomainsToGroupsMap 
+ * @returns a map of groups by id to their roles
+ */
+async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $groupId: [ID!], $rolesCursor: String) {
+        actor {
+          organization {
+            authorizationManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  groups(id: $groupId) {
+                    groups {
+                      roles(cursor: $rolesCursor) {
+                        roles {
+                          accountId
+                          type
+                          roleId
+                          organizationId
+                          name
+                          id
+                          displayName
+                        }
+                        nextCursor
+                      }
+                      displayName
+                      id
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: {
+      "authDomainId": null,
+      "groupId": null,
+      "rolesCursor": null
+    }
+  }
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  };
+
+  try {
+    // I'm fairly certain that group/role/account is a triplet, that is a group only has one role per account, but the API suggests that might change
+    let groupIdToRolesMap = new Map();
+    for (const authDomain of authDomainsToGroupsMap.keys()) {
+      body.variables.authDomainId = authDomain;
+      let groupsArray = authDomainsToGroupsMap.get(authDomain);
+      for (const group of groupsArray) {
+        let roles = [];
+        body.variables.groupId = group.id;
+        options.body = JSON.stringify(body);
+        do {
+          let response = await $http.post(options);
+          let responseBody = JSON.parse(response.body);
+          roles = roles.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.roles);
+          body.variables.rolesCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.nextCursor;
+          options.body = JSON.stringify(body);
+        } while (body.variables.rolesCursor)
+        groupIdToRolesMap.set(group.id, roles)
+      }
+    };
+    return groupIdToRolesMap;
+  } catch (error) {
+    console.error('getGroupIdToRolesMap():', error);
+  }
+}
+
+
+/**
+ * Get a map of users by email to their user details.
+ * @param {*} authDomainsArray an array of auth domains
+ * @returns a map of users by email to their user details.
+ */
+async function getEmailToUserMap(authDomainsArray) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $usersCursor: String) {
+        actor {
+          organization {
+            userManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  users(cursor: $usersCursor) {
+                    nextCursor
+                    users {
+                      email
+                      id
+                      lastActive
+                      name
+                      timeZone
+                      type {
+                        id
+                        displayName
+                      }
+                      groups {
+                        groups {
+                          displayName
+                          id
+                        }
+                        nextCursor
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: {
+      "authDomainId": null,
+      "usersCursor": null
+    }
+  }
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(),
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  };
+
+  try {
+    let getEmailToUserMap = new Map(); // TODO: currently assumes that users are unique to an auth domain
+    for (const authDomain of authDomainsArray) {
+      body.variables.authDomainId = authDomain.id;
+      options.body = JSON.stringify(body);
+      console.log('getEmailToUserMap(): authDomain.id:', authDomain.id);
+      let users = [];
+      do {
+        let response = await $http.post(options);
+        console.log('getEmailToUserMap(): options:', options);
+        let responseBody = JSON.parse(response.body);
+        let usersArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users;
+        users = users.concat(usersArray);
+        body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.nextCursor;
+        options.body = JSON.stringify(body);
+        // Filter users with group pagination
+        const usersWithNextCursorGroup = users.filter(user => {
+          return user.groups.nextCursor;
+        })
+        for (const user of usersWithNextCursorGroup) { // Ghastly nested pagination in the GraphQL! :O
+          let groups = user.groups;
+          if (groups.nextCursor) {
+            groups = getUserGroupsByCursor(user);
+          }
+          user.groups = groups;
+        }
+      } while (body.variables.usersCursor)
+      for (const user of users) {
+        getEmailToUserMap.set(user.email, user);
+      }
+      console.log('getEmailToUserMap(): emailToUserMap:', getEmailToUserMap);
+    };
+    return getEmailToUserMap;
+  } catch (error) {
+    console.error('getEmailToUserMap():', error);
+  }
+}
+
+
+/**
+ * Get user groups for the supplied auth domain and user.
+ * @param {*} authDomainId the auth domain id.
+ * @param {*} user the user.
+ * @returns user groups for the supplied auth domain and user.
+ */
+async function getUserGroupsByCursor(authDomainId, user) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $userId: [ID!], $groupsCursor: String) {
+        actor {
+          organization {
+            userManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  users(id: $userId) {
+                    users {
+                      email
+                      id
+                      lastActive
+                      name
+                      timeZone
+                      type {
+                        id
+                        displayName
+                      }
+                      groups (cursor: groupsCursor) {
+                        groups {
+                          displayName
+                          id
+                        }
+                        nextCursor
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: {
+      "authDomainId": null,
+      "userId": null,
+      "groupsCursor": null
+    }
+  }
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    retry: { // By default, Got does not retry on POST
+      retries: 3
+    }
+  };
+
+  try {
+    let groups = user.groups;
+    body.variables.authDomainId = authDomainId;
+    body.variables.userId = user.id;
+    body.variables.groupsCursor = user.groups.nextCursor;
+    options.body = JSON.stringify(body);
+    do {
+      let response = await $http.post(options);
+      let responseBody = JSON.parse(response.body);
+      groups = groups.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users[0].groups);
+      body.variables.groupsCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users[0].groups.nextCursor;
+    } while (body.variables.groupsCursor)
+    return groups;
+  } catch (error) {
+    console.error('getUserGroupsByCursor():', error)
+  }
+}
+
+
+/**
+ * The scripts main function and starting point.
+ */
+async function main() {
+  let response = await processShowback();
+
+  console.log('main(): Script execution completed');
+}
+
+
+// Let's get this party started
+main();

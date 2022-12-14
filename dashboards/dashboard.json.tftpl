@@ -1,0 +1,456 @@
+{
+  "name": "${DASHBOARD_NAME}",
+  "description": null,
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "Department Showback",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Consumption Cost By Department (this month)",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 4,
+            "height": 4
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "${TOTAL_CONSUMPTION_COST_BY_DEPARTMENT_THIS_MONTH}"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Consumption Cost by Department (this month)",
+          "layout": {
+            "column": 5,
+            "row": 1,
+            "width": 8,
+            "height": 4
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "${CONSUMPTION_COST_BY_DEPARTMENT_THIS_MONTH}"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Full Users by Department",
+          "layout": {
+            "column": 1,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId":  ${ACCOUNT_ID},
+                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Core Users by Department",
+          "layout": {
+            "column": 4,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Basic Users by Department",
+          "layout": {
+            "column": 7,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Total Users by Department",
+          "layout": {
+            "column": 10,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Total Consumption by Month",
+          "layout": {
+            "column": 1,
+            "row": 8,
+            "width": 12,
+            "height": 4
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [
+              {
+                "name": "Ingest Cost",
+                "precision": 2,
+                "type": "decimal"
+              },
+              {
+                "name": "Total Cost",
+                "precision": 2,
+                "type": "decimal"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "FROM NrMTDConsumption\nSELECT\n  filter(latest(billableConsumption), WHERE metric = 'FullUsers' OR metric = 'FullPlatformUsers') * ${FULL_USER_USD} + filter(latest(billableConsumption) OR 0, WHERE metric = 'CoreUsers') * ${CORE_USER_USD} + filter(latest(GigabytesIngestedBillable) * ${GB_INGEST_USD}, WHERE productLine = 'DataPlatform') AS 'Total Cost (USD)',\n  filter(latest(billableConsumption), WHERE metric = 'FullUsers' OR metric = 'FullPlatformUsers') AS 'FSO User Count',\n  filter(latest(billableConsumption), WHERE metric = 'FullUsers' OR metric = 'FullPlatformUsers') * ${FULL_USER_USD} as 'FSO User Cost (USD)',\n  filter(latest(billableConsumption) OR 0, WHERE metric = 'CoreUsers') AS 'Core User Count',\n  filter(latest(billableConsumption) OR 0, WHERE metric = 'CoreUsers') * ${CORE_USER_USD} AS 'Core User Cost (USD)',\n filter(latest(GigabytesIngestedBillable), WHERE productLine = 'DataPlatform') AS 'Ingested GB',\n  filter(latest(GigabytesIngestedBillable) * ${GB_INGEST_USD}, WHERE productLine = 'DataPlatform') AS 'Ingest Cost (USD)'\nSINCE 12 months ago facet monthOf(timestamp) order by timestamp"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account Users (Summary)",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Basic, Core and Full user counts by account",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "FROM Metric SELECT latest(`showback.account.basicuser.count`) AS 'Basic', latest(`showback.account.coreuser.count`) AS 'Core', latest(`showback.account.fulluser.count`) AS 'Full', latest(`showback.account.basicuser.count`)+latest(`showback.account.coreuser.count`)+latest(`showback.account.fulluser.count`) AS 'Total' since 24 hours ago facet account LIMIT MAX "
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "% by user type",
+          "layout": {
+            "column": 7,
+            "row": 4,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT (latest(`showback.organization.basicuser.count`) OR 0 ) + (latest(`showback.organization.coreuser.count`) OR 0) + (latest(`showback.organization.fulluser.count`) OR 0) AS 'Users'\nFROM Metric SINCE 1 day AGO\nFACET cases(\n  WHERE metricName = 'showback.organization.basicuser.count' AS 'Basic',\n  WHERE metricName = 'showback.organization.coreuser.count' AS 'Core',\n  WHERE metricName = 'showback.organization.fulluser.count' AS 'Full'\n)"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Account users by type",
+          "layout": {
+            "column": 10,
+            "row": 4,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT (latest(`showback.organization.basicuser.count`) OR 0 ) + (latest(`showback.organization.coreuser.count`) OR 0) + (latest(`showback.organization.fulluser.count`) OR 0) AS 'Users'\nFROM Metric SINCE 1 month AGO TIMESERIES AUTO\nFACET cases(\n  WHERE metricName = 'showback.organization.basicuser.count' AS 'Basic',\n  WHERE metricName = 'showback.organization.coreuser.count' AS 'Core',\n  WHERE metricName = 'showback.organization.fulluser.count' AS 'Full'\n)"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            },
+            "yAxisLeft": {
+              "zero": true
+            }
+          }
+        },
+        {
+          "title": "Unique Users",
+          "layout": {
+            "column": 1,
+            "row": 7,
+            "width": 12,
+            "height": 8
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [
+              {
+                "format": "%b %d, %Y, %X",
+                "name": "last_access_at",
+                "type": "custom"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT timestamp, email, full_name, last_access_at, user_tier_name, departmentSet FROM Showback_UniqueUsers LIMIT MAX SINCE 1 day ago"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account Users (All Accounts)",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Account details",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "FROM Showback_AccountUsers SELECT uniqueCount(account_name) AS Accounts since 1 day ago"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Basic, Core and Full user counts by account",
+          "layout": {
+            "column": 4,
+            "row": 1,
+            "width": 9,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "FROM Metric SELECT latest(`showback.account.basicuser.count`) AS 'Basic', latest(`showback.account.coreuser.count`) AS 'Core', latest(`showback.account.fulluser.count`) AS 'Full', latest(`showback.account.basicuser.count`)+latest(`showback.account.coreuser.count`)+latest(`showback.account.fulluser.count`) AS 'Total' since 24 hours ago facet account LIMIT MAX "
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "User list - by account",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 12,
+            "height": 5
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [
+              {
+                "format": "%b %d, %Y, %X",
+                "name": "last_access_at",
+                "type": "custom"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${ACCOUNT_ID},
+                "query": "SELECT  timestamp, account_id, account_name, email, full_name, last_access_at, user_tier_name, user_role \n FROM Showback_AccountUsers LIMIT MAX order by last_access_at desc since 1 day ago"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
