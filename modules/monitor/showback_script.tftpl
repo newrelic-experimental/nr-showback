@@ -242,7 +242,8 @@ async function getOrgAccounts() {
       `
     }),
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   };
 
@@ -608,7 +609,8 @@ async function postCustomEvents(body) {
       'Content-Type': 'application/json'
     },
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   }
   try {
@@ -635,7 +637,8 @@ async function postCustomEvents(body) {
       'Content-Type': 'application/json'
     },
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   }
   try {
@@ -689,7 +692,8 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   };
 
@@ -751,7 +755,8 @@ async function getAuthDomainsArray() {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   };
 
@@ -824,7 +829,8 @@ async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   };
 
@@ -910,7 +916,8 @@ async function getEmailToUserMap(authDomainsArray) {
     },
     body: JSON.stringify(),
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   };
 
@@ -1009,7 +1016,8 @@ async function getUserGroupsByCursor(authDomainId, user) {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      retries: 3
+      limit: 3,
+      methods: ['POST']
     }
   };
 
