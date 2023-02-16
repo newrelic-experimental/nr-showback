@@ -47,6 +47,7 @@ const TOTAL_USER_COUNT_ATTRIBUTE_NAME = "totalUserCount";
 const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${SHOWBACK_INSERT_ACCOUNT_ID};  // TODO: Update with reporting account id
 
 const CHUNK_SIZE = 100;
+const GQL_API_CHUNK_SIZE = 25;
 
 
 /**
@@ -787,11 +788,62 @@ async function getAuthDomainsArray() {
 
 
 /**
- * Get a map of groups by id to their roles
- * @param {*} authDomainsToGroupsMap 
- * @returns a map of groups by id to their roles
+ * Delay (sleep) by a number of milliseconds.
+ * @param {*} milliseconds number of milliseconds to wait for.
+ * @returns 
+ */
+function delay(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+
+/**
+ * Get a map of groups by id to their roles.
+ * @param {*} authDomainsToGroupsMap a map of auth domains to their groups.
+ * @returns a map of groups by id to their roles.
  */
 async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
+  try {
+    // I'm fairly certain that group/role/account is a triplet, that is a group only has one role per account, but the API suggests that might change
+    let groupIdToRolesMap = new Map();
+    for (const authDomain of authDomainsToGroupsMap.keys()) {
+      let groupsArray = authDomainsToGroupsMap.get(authDomain);
+
+      // Chunk array before querying to avoid hitting the GraphQL API request limit
+      let chunkedGroupsArray = [];
+      Array.from({length: Math.ceil(groupsArray.length / GQL_API_CHUNK_SIZE)}, (val, i) => {
+        chunkedGroupsArray.push(groupsArray.slice(i * GQL_API_CHUNK_SIZE, i * GQL_API_CHUNK_SIZE + GQL_API_CHUNK_SIZE))
+      });
+
+      // Run the chunked queries in parallel
+      for (const chunkedGroups of chunkedGroupsArray) {  // Blocking
+        let promises = [];
+        for (const group of chunkedGroups) {
+          promises.push(getGroupIdAndRolesObject(authDomain, group));
+        };
+        // Await all promises  
+        let groupToRolesArray = await Promise.all(promises);
+        for (const groupToRoles of groupToRolesArray) {
+          groupIdToRolesMap.set(groupToRoles.groupId, groupToRoles.roles);
+        }
+        // Wait 0.05 seconds before issuing queries for the next chunk of groups, to avoid hitting the NerdGraph query limit
+        await delay(50);
+      }
+    };
+    return groupIdToRolesMap;
+  } catch (error) {
+    console.error('getGroupIdToRolesMap():', error);
+  }
+}
+
+
+/**
+ * Get an array of roles for a group.
+ * @param {*} authDomain authentication domain for the supplied group.
+ * @param {*} group group for which roles are to be retrieved.
+ * @returns an object relating a group id to its roles { groupId: group.id, roles: roles}.
+ */
+async function getGroupIdAndRolesObject(authDomain, group) {
   const body = {
     query: `
       query ($authDomainId: [ID!], $groupId: [ID!], $rolesCursor: String) {
@@ -844,33 +896,33 @@ async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
     }
   };
 
-  try {
-    // I'm fairly certain that group/role/account is a triplet, that is a group only has one role per account, but the API suggests that might change
-    let groupIdToRolesMap = new Map();
-    for (const authDomain of authDomainsToGroupsMap.keys()) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      let roles = [];
       body.variables.authDomainId = authDomain;
-      let groupsArray = authDomainsToGroupsMap.get(authDomain);
-      for (const group of groupsArray) {
-        let roles = [];
-        body.variables.groupId = group.id;
+      body.variables.groupId = group.id;
+      options.body = JSON.stringify(body);
+      let errorMessage = null;
+      do {
+        let response = await $http.post(options);
+        let responseBody = JSON.parse(response.body);
+        if (responseBody.errors) {
+          errorMessage = 'Error in getGroupIdAndRolesObject() for Auth Domain: ' + authDomain + ', and group: ' + group.displayName + ' :- message: ' + responseBody.errors[0].message + ', path: ' + responseBody.errors[0].path;
+          break;
+        }
+        roles = roles.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.roles);
+        body.variables.rolesCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.nextCursor;
         options.body = JSON.stringify(body);
-        do {
-          let response = await $http.post(options);
-          let responseBody = JSON.parse(response.body);
-          if (responseBody.errors) {
-            console.error(errors);
-          }
-          roles = roles.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.roles);
-          body.variables.rolesCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.nextCursor;
-          options.body = JSON.stringify(body);
-        } while (body.variables.rolesCursor)
-        groupIdToRolesMap.set(group.id, roles)
+      } while (body.variables.rolesCursor)
+      if (errorMessage) {
+        reject(errorMessage);
+      } else {
+        resolve({ groupId: group.id, roles: roles});
       }
-    };
-    return groupIdToRolesMap;
-  } catch (error) {
-    console.error('getGroupIdToRolesMap():', error);
-  }
+    } catch (error) {
+      console.error('getGroupIdAndRolesObject():', error, authDomain, group.displayName);
+    }
+  })
 }
 
 
