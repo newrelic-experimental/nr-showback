@@ -251,8 +251,8 @@ async function getOrgAccounts() {
   try {
     let response = await $http.post(options);
     let responseBody = JSON.parse(response.body);
-    if (responseBody.errors) {
-      console.error(errors);
+    if (responseBody.hasOwnProperty('errors')) {
+      console.error(responseBody.errors);
     }
     let managedAccounts = responseBody.data.actor.organization.accountManagement.managedAccounts;
     return managedAccounts;
@@ -711,8 +711,8 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
         options.body = JSON.stringify(body);
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
-        if (responseBody.errors) {
-          console.error(errors);
+        if (responseBody.hasOwnProperty('errors')) {
+          console.error(responseBody.errors);
         }
         groups = groups.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups);
         body.variables.groupsCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.nextCursor;
@@ -773,8 +773,8 @@ async function getAuthDomainsArray() {
     do {
       let response = await $http.post(options);
       let responseBody = JSON.parse(response.body);
-      if (responseBody.errors) {
-        console.error(errors);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error(responseBody.errors);
       }
       authDomains = authDomains.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains);
       body.variables.authDomainCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.nextCursor;
@@ -906,8 +906,8 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       do {
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
-        if (responseBody.errors) {
-          errorMessage = 'Error in getGroupIdAndRolesObject() for Auth Domain: ' + authDomain + ', and group: ' + group.displayName + ' :- message: ' + responseBody.errors[0].message + ', path: ' + responseBody.errors[0].path;
+        if (responseBody.hasOwnProperty('errors')) {
+          console.error(responseBody.errors);
           break;
         }
         roles = roles.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.roles);
@@ -997,8 +997,8 @@ async function getEmailToUserMap(authDomainsArray) {
         let response = await $http.post(options);
         console.log('getEmailToUserMap(): options:', options);
         let responseBody = JSON.parse(response.body);
-        if (responseBody.errors) {
-          console.error(errors);
+        if (responseBody.hasOwnProperty('errors')) {
+          console.error(responseBody.errors);
         }
         let usersArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users;
         users = users.concat(usersArray);
@@ -1098,8 +1098,8 @@ async function getUserGroupsByCursor(authDomainId, user) {
     do {
       let response = await $http.post(options);
       let responseBody = JSON.parse(response.body);
-      if (responseBody.errors) {
-        console.error(errors);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error(responseBody.errors);
       }
       groups = groups.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users[0].groups);
       body.variables.groupsCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users[0].groups.nextCursor;
