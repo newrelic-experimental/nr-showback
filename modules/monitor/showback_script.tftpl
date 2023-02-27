@@ -154,7 +154,7 @@ function buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap)
     }
     let departmentSet = null;
     if (emailToDepartmentSetMap.has(email)) {
-      JSON.stringify(Array.from(emailToDepartmentSetMap.get(email).values()));
+      departmentSet = JSON.stringify(Array.from(emailToDepartmentSetMap.get(email).values()));
     }
     let uniqueUser = {
       email: user.email,
