@@ -1,7 +1,8 @@
 const IS_LOCAL_ENV = typeof $env === "undefined" || $env === null;
 
-// TODO: Comment the following line to log debug messages
+// TODO: Comment the following lines to log debug messages
 console.log = function() {}
+console.debug = function() {}
 
 /**
  * For local development
@@ -77,18 +78,26 @@ async function processShowback() {
   let groupIdToRolesMap = await getGroupIdToRolesMap(authDomainToGroupsMap); // Contains group:account relationships 
   console.log('processShowback(): groupToRolesMap:', groupIdToRolesMap);
 
-  // Get a map of users by email to their user details, which contains reference to roles
-  let emailToUserMap = await getEmailToUserMap(authDomainsArray); // Contains user:groups relationships
-  console.log('processShowback(): emailToUserMap:', emailToUserMap);
+  // Get a map of groups by id to their group and users
+  let groupIdToGroupAndUsersMap = await getGroupIdToGroupAndUsersMap(authDomainsArray);  // Contains group:users relationships
+  console.log('processShowback(): getGroupIdToGroupAndUsersMap:', groupIdToGroupAndUsersMap);
+
+  // Build a map of users (by email) to their user details and groups
+  let emailToUserAndGroupsMap = buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap);  // Contains user:groups relationships
+  console.log('processShowback(): buildEmailToUserAndGroupsMap:', emailToUserAndGroupsMap);
+
+  // Enrich users map
+  emailToUserAndGroupsMap = await enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap);
+  console.log('processShowback(): emailToUserAndGroupsMap:', emailToUserAndGroupsMap);
 
   // Build a map of users by email to their accounts
-  let emailToAccountsMap = buildEmailToAccountsMap(emailToUserMap, groupIdToRolesMap, accountIdToNameMap);
+  let emailToAccountsMap = buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
 
   // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
-  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserMap);
+  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserAndGroupsMap);
 
   // Build a map of accounts, by id, to their users
-  let accountIdToUsersMap = buildAccountToUsersMap(emailToUserMap, groupIdToRolesMap, accountIdToNameMap);
+  let accountIdToUsersMap = buildAccountToUsersMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
 
   // Get the current time
   const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
@@ -97,13 +106,13 @@ async function processShowback() {
   postDepartmentShowback(departmentToUserTypeCountsMap, currentTimestamp);
 
   // Create Showback_AccountUsers in NRDB
-  let accountUsersArray = postAccountUsers(emailToUserMap, groupIdToRolesMap, accountIdToNameMap);
+  let accountUsersArray = postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
 
   // Create showback.account metrics in NRDB
   postAccounts(accountIdToUsersMap, accountIdToNameMap, currentTimestamp);
 
   // Build a UniqueUsersArray
-  let uniqueUsersArray = buildUniqueUsersArray(emailToUserMap, emailToDepartmentSetMap);
+  let uniqueUsersArray = buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap);
 
   // Create Showback_UniqueUsers in NRDB
   postUniqueUsers(uniqueUsersArray);
@@ -127,13 +136,13 @@ async function processShowback() {
 
 /**
  * Build a UniqueUsersArray.
- * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} emailToDepartmentSetMap a map of user email to their departments.
  * @returns a UniqueUsersArray.
  */
-function buildUniqueUsersArray(emailToUserMap, emailToDepartmentSetMap) {
+function buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap) {
   let uniqueUsersArray = [];
-  for (const [email, user] of emailToUserMap) {
+  for (const [email, user] of emailToUserAndGroupsMap) {
     let lastAccess = new Date(user.lastActive).getTime();
     let userTierName;
     if (user.type.displayName == 'Full platform') {
@@ -143,12 +152,16 @@ function buildUniqueUsersArray(emailToUserMap, emailToDepartmentSetMap) {
     } else {
       userTierName = 'Core';
     }
+    let departmentSet = null;
+    if (emailToDepartmentSetMap.has(email)) {
+      JSON.stringify(Array.from(emailToDepartmentSetMap.get(email).values()));
+    }
     let uniqueUser = {
       email: user.email,
       full_name: user.name,
       last_access_at: lastAccess,
       last_access_date: (lastAccess / 86400) + 25569,
-      departmentSet: JSON.stringify(Array.from(emailToDepartmentSetMap.get(email).values())),
+      departmentSet: departmentSet,
       user_id: Number(user.id),
       user_tier_id: Number(user.type.id),
       user_tier_name: userTierName,
@@ -249,6 +262,7 @@ async function getOrgAccounts() {
   };
 
   try {
+    console.debug('getOrgAccounts() $http.post');  // TODO
     let response = await $http.post(options);
     let responseBody = JSON.parse(response.body);
     if (responseBody.hasOwnProperty('errors')) {
@@ -257,33 +271,52 @@ async function getOrgAccounts() {
     let managedAccounts = responseBody.data.actor.organization.accountManagement.managedAccounts;
     return managedAccounts;
   } catch (error) {
-    console.error(error);
+    console.error('getOrgAccounts():', error);
   }
 }
 
 
 /**
  * Post a set of account users to the Showback_AccountUsers data type in NRDB.
- * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
  * @param {*} accountIdToNameMap a map of account ids to account names.
  * @returns an array of account users. 
  */
-function postAccountUsers(emailToUserMap, groupIdToRolesMap, accountIdToNameMap) {
+function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap) {
   let accountUsersArray = [];
-  for (const [email, user] of emailToUserMap) {
+  for (const [email, user] of emailToUserAndGroupsMap) {
+    let lastAccess = new Date(user.lastActive).getTime();
+    let userTierName;
+    if (user.type.displayName == 'Full platform') {
+      userTierName = 'FSO';
+    } else if (user.type.displayName == 'Basic') {
+      userTierName = 'Basic';
+    } else {
+      userTierName = 'Core';
+    }
+    if (!user.groups) {
+      console.log('postAccountUsers(): User has no groups', JSON.stringify(user, null, 4));
+      let accountUserObject = {
+        account_id: null,
+        account_name: null,
+        email: user.email,
+        full_name: user.name,
+        group_id: null,
+        group_name: null,
+        last_access_at: lastAccess,
+        last_access_date: (lastAccess / 86400) + 25569,
+        user_id: Number(user.id),
+        user_tier_id: Number(user.type.id),
+        user_tier_name: userTierName,
+        user_role: null,
+        eventType: ACCOUNT_USERS_DATA_TYPE_NAME
+      };
+      accountUsersArray.push(accountUserObject);
+      continue;
+    }
     for (const group of user.groups.groups) {
       if (groupIdToRolesMap.get(group.id)) {
-        let lastAccess = new Date(user.lastActive).getTime();
-        let userTierName;
-        if (user.type.displayName == 'Full platform') {
-          userTierName = 'FSO';
-        } else if (user.type.displayName == 'Basic') {
-          userTierName = 'Basic';
-        } else {
-          userTierName = 'Core';
-        }
-
         for (const role of groupIdToRolesMap.get(group.id)) {
           let accountUserObject = {
             account_id: role.accountId,
@@ -316,17 +349,140 @@ function postAccountUsers(emailToUserMap, groupIdToRolesMap, accountIdToNameMap)
 
 
 /**
+ * Build a map of users (by email) to their user details and groups.
+ * @param {*} groupIdToGroupAndUsersMap a map of groups by id to their group and users.
+ * @returns a map of users (by email) to their user details and groups.
+ */
+function buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap) {
+  let emailToUserAndGroupsMap = new Map();
+  for (const [groupId, group] of groupIdToGroupAndUsersMap) {
+    for (let user of group.users.users) {
+      if (emailToUserAndGroupsMap.has(user.email)) {
+        user = emailToUserAndGroupsMap.get(user.email);
+        user.groups.groups.push({ displayName: group.displayName, id: group.id });
+      } else {
+        user.groups = {
+          groups: [
+            {
+              displayName: group.displayName,
+              id: group.id
+            }
+          ]
+        };
+      }
+      emailToUserAndGroupsMap.set(user.email, user);
+    }
+  }
+  return emailToUserAndGroupsMap;
+}
+
+
+/**
+ * Enrich a map of users (by email) with additional user details.
+ * @param {*} authDomainsArray an array of auth domains
+ * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
+ * @returns an enriched map of users (by email) to their user details and groups.
+ */
+async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $usersCursor: String) {
+        actor {
+          organization {
+            userManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  users(cursor: $usersCursor) {
+                    nextCursor
+                    users {
+                      email
+                      id
+                      lastActive
+                      name
+                      timeZone
+                      type {
+                        id
+                        displayName
+                      }
+                    }
+                  }
+                  id
+                  name
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: {
+      "authDomainId": null,
+      "usersCursor": null
+    }
+  }
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: {
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(),
+    retry: { // By default, Got does not retry on POST
+      limit: 3,
+      methods: ['POST']
+    }
+  };
+
+  try {
+    for (const authDomain of authDomainsArray) {
+      body.variables.authDomainId = authDomain.id;
+      options.body = JSON.stringify(body);
+      console.log('enrichEmailToUserAndGroupsMap(): authDomain.id:', authDomain.id);
+      let users = [];
+      do {
+        console.debug('enrichEmailToUserAndGroupsMap() $http.post, Auth Domain:' + authDomain.name);  // TODO
+        let response = await $http.post(options);
+        console.log('enrichEmailToUserAndGroupsMap(): options:', options);
+        let responseBody = JSON.parse(response.body);
+        if (responseBody.hasOwnProperty('errors')) {
+          console.error(responseBody.errors);
+        }
+        let usersArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users;
+        users = users.concat(usersArray);
+        body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.nextCursor;
+        options.body = JSON.stringify(body);
+      } while (body.variables.usersCursor)
+      // Enrich emailToUserAndGroupsMap with additional user data
+      for (const user of users) {
+        let originalUser = emailToUserAndGroupsMap.get(user.email);
+        let enrichedUser = Object.assign(user, originalUser);
+        emailToUserAndGroupsMap.set(user.email, enrichedUser);
+      }
+    };
+    console.log('enrichEmailToUserAndGroupsMap(): emailToUserAndGroupsMap:', emailToUserAndGroupsMap);
+    return emailToUserAndGroupsMap;
+  } catch (error) {
+    console.error('enrichEmailToUserAndGroupsMap():', error);
+  }
+}
+
+
+/**
  * Build a map of users (by email) to their accounts. 
- * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
  * @param {*} accountIdToNameMap a map of account ids to account names.
  * @returns a map of users (by email) to their accounts.
  */
-function buildEmailToAccountsMap(emailToUserMap, groupIdToRolesMap, accountIdToNameMap) {
+function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap) {
   let emailToAccountsMap = new Map();
   let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
-  for (const [email, user] of emailToUserMap) {
+  for (const [email, user] of emailToUserAndGroupsMap) {
     let accountSet = new Set();
+    if (!user.groups) {
+      console.error('buildEmailToAccountsMap(): User has no groups', JSON.stringify(user, null, 4));
+      continue;
+    }
     for (const group of user.groups.groups) {
       // Check whether to ignore the group, continue if it is to be ignored
       if (ignoredGroups.includes(group.displayName)) {
@@ -356,15 +512,19 @@ function buildEmailToAccountsMap(emailToUserMap, groupIdToRolesMap, accountIdToN
 
 /**
  * Build a map of accounts, by id, to their users. 
- * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
  * @returns a map of accounts, by id, to their users.
  */
- function buildAccountToUsersMap(emailToUserMap, groupIdToRolesMap) {
+ function buildAccountToUsersMap(emailToUserAndGroupsMap, groupIdToRolesMap) {
   let accountIdToUsersMap = new Map();
   let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
-  for (const [email, user] of emailToUserMap) {
+  for (const [email, user] of emailToUserAndGroupsMap) {
     let userSet = new Set();
+    if (!user.groups) {
+      console.log('buildEmailToAccountsMap(): User has no groups', JSON.stringify(user, null, 4));
+      continue;
+    }
     for (const group of user.groups.groups) {
       // Check whether to ignore the group, continue if it is to be ignored
       if (ignoredGroups.includes(group.displayName)) {
@@ -397,10 +557,10 @@ function buildEmailToAccountsMap(emailToUserMap, groupIdToRolesMap, accountIdToN
 /**
  * Build a map of departments to their user type counts.
  * @param {*} emailToAccountsMap a map of users (by email) to their accounts.
- * @param {*} emailToUserMap a map of users by email to their user details.
+ * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @returns a map of departments to their user type counts, and a map of user to departments.
  */
-function buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserMap) {
+function buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserAndGroupsMap) {
   let departmentToUserTypeCountsMap = new Map();
   let emailToDepartmentSetMap = new Map();
   let ignoreNewRelicUsers = ${SHOWBACK_IGNORE_NEWRELIC_USERS};
@@ -434,7 +594,7 @@ function buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserMap) 
     }
 
     // Initialize, or update, an existing department's userCount
-    let user = emailToUserMap.get(email);
+    let user = emailToUserAndGroupsMap.get(email);
     let userType = user.type;
     user.departmentSet = departmentSet;
     for (const department of departmentSet) {
@@ -619,6 +779,7 @@ async function postCustomEvents(body) {
     }
   }
   try {
+    console.debug('postCustomEvents() $http.post');  // TODO
     return await $http.post(options);
   } catch (e) {
     console.error('postCustomEvents():', e);
@@ -647,6 +808,7 @@ async function postCustomEvents(body) {
     }
   }
   try {
+    console.debug('postMetrics() $http.post');  // TODO
     return await $http.post(options);
   } catch (e) {
     console.error('postMetrics():', e);
@@ -709,6 +871,7 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
       do {
         body.variables.authDomainId = authDomain.id;
         options.body = JSON.stringify(body);
+        console.debug('getAuthDomainToGroupsMap() $http.post', authDomain.name);  // TODO
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -771,6 +934,7 @@ async function getAuthDomainsArray() {
   try {
     let authDomains = [];
     do {
+      console.debug('getAuthDomainsArray() $http.post');  // TODO
       let response = await $http.post(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
@@ -904,6 +1068,7 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       options.body = JSON.stringify(body);
       let errorMessage = null;
       do {
+        console.debug('getGroupIdAndRolesObject() $http.post', authDomain, group.displayName, body.variables.rolesCursor);  // TODO
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -927,39 +1092,34 @@ async function getGroupIdAndRolesObject(authDomain, group) {
 
 
 /**
- * Get a map of users by email to their user details.
+ * Get a map of groups by id to their group and users.
  * @param {*} authDomainsArray an array of auth domains
- * @returns a map of users by email to their user details.
+ * @returns a map of groups by id to their group and users.
  */
-async function getEmailToUserMap(authDomainsArray) {
+async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
   const body = {
     query: `
-      query ($authDomainId: [ID!], $usersCursor: String) {
+      query ($authDomainId: [ID!], $groupsCursor: String) {
         actor {
           organization {
             userManagement {
               authenticationDomains(id: $authDomainId) {
                 authenticationDomains {
-                  users(cursor: $usersCursor) {
-                    nextCursor
-                    users {
-                      email
+                  groups(cursor: $groupsCursor) {
+                    groups {
                       id
-                      lastActive
-                      name
-                      timeZone
-                      type {
-                        id
-                        displayName
-                      }
-                      groups {
-                        groups {
-                          displayName
+                      users {
+                        users {
                           id
+                          email
+                          name
+                          timeZone
                         }
                         nextCursor
                       }
+                      displayName
                     }
+                    nextCursor
                   }
                 }
               }
@@ -970,7 +1130,7 @@ async function getEmailToUserMap(authDomainsArray) {
     `,
     variables: {
       "authDomainId": null,
-      "usersCursor": null
+      "groupsCursor": null
     }
   }
   const options = {
@@ -987,77 +1147,71 @@ async function getEmailToUserMap(authDomainsArray) {
   };
 
   try {
-    let getEmailToUserMap = new Map(); // TODO: currently assumes that users are unique to an auth domain
+    let groupIdToGroupAndUsersMap = new Map();
     for (const authDomain of authDomainsArray) {
       body.variables.authDomainId = authDomain.id;
       options.body = JSON.stringify(body);
-      console.log('getEmailToUserMap(): authDomain.id:', authDomain.id);
-      let users = [];
+      console.log('getGroupIdToGroupAndUsersMap(): authDomain.id:', authDomain.id);
+      let groups = [];
       do {
+        console.debug('getGroupIdToGroupAndUsersMap() $http.post, Auth Domain:' + authDomain.name);  // TODO
         let response = await $http.post(options);
-        console.log('getEmailToUserMap(): options:', options);
+        console.log('getGroupIdToGroupAndUsersMap(): options:', options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
           console.error(responseBody.errors);
         }
-        let usersArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users;
-        users = users.concat(usersArray);
-        body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.nextCursor;
+        let groupsArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups;
+        groups = groups.concat(groupsArray);
+        body.variables.groupsCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.nextCursor;
         options.body = JSON.stringify(body);
-        // Filter users with group pagination
-        const usersWithNextCursorGroup = users.filter(user => {
-          return user.groups.nextCursor;
+        // Filter groups with user pagination
+        const groupsWithNextCursorUser = groups.filter(group => {
+          return group.users.nextCursor;
         })
-        for (const user of usersWithNextCursorGroup) { // Ghastly nested pagination in the GraphQL! :O
-          let groups = user.groups;
-          if (groups.nextCursor) {
-            groups = getUserGroupsByCursor(user);
+        for (const group of groupsWithNextCursorUser) { // Ghastly nested pagination in the GraphQL! :O
+          let users = group.users.users;
+          if (group.users.nextCursor) {
+            users = await getGroupUsersByCursor(authDomain.id, group);
           }
-          user.groups = groups;
+          group.users.users = users;
         }
-      } while (body.variables.usersCursor)
-      for (const user of users) {
-        getEmailToUserMap.set(user.email, user);
+      } while (body.variables.groupsCursor)
+      for (const group of groups) {
+        groupIdToGroupAndUsersMap.set(group.id, group);
       }
-      console.log('getEmailToUserMap(): emailToUserMap:', getEmailToUserMap);
+      console.log('getGroupIdToGroupAndUsersMap(): groupIdToGroupAndUsersMap:', groupIdToGroupAndUsersMap);
     };
-    return getEmailToUserMap;
+    return groupIdToGroupAndUsersMap;
   } catch (error) {
-    console.error('getEmailToUserMap():', error);
+    console.error('getGroupIdToGroupAndUsersMap():', error);
   }
 }
 
 
 /**
- * Get user groups for the supplied auth domain and user.
+ * Get group users for the supplied auth domain and group.
  * @param {*} authDomainId the auth domain id.
- * @param {*} user the user.
- * @returns user groups for the supplied auth domain and user.
+ * @param {*} group the group.
+ * @returns group users for the supplied auth domain and group.
  */
-async function getUserGroupsByCursor(authDomainId, user) {
+async function getGroupUsersByCursor(authDomainId, group) {
   const body = {
     query: `
-      query ($authDomainId: [ID!], $userId: [ID!], $groupsCursor: String) {
+      query ($authDomainId: [ID!], $groupId: [ID!], $usersCursor: String) {
         actor {
           organization {
             userManagement {
               authenticationDomains(id: $authDomainId) {
                 authenticationDomains {
-                  users(id: $userId) {
-                    users {
-                      email
-                      id
-                      lastActive
-                      name
-                      timeZone
-                      type {
-                        id
-                        displayName
-                      }
-                      groups (cursor: $groupsCursor) {
-                        groups {
-                          displayName
+                  groups(id: $groupId) {
+                    groups {
+                      users (cursor: $usersCursor) {
+                        users {
                           id
+                          email
+                          name
+                          timeZone
                         }
                         nextCursor
                       }
@@ -1072,8 +1226,8 @@ async function getUserGroupsByCursor(authDomainId, user) {
     `,
     variables: {
       "authDomainId": null,
-      "userId": null,
-      "groupsCursor": null
+      "groupId": null,
+      "usersCursor": null
     }
   }
   const options = {
@@ -1090,23 +1244,26 @@ async function getUserGroupsByCursor(authDomainId, user) {
   };
 
   try {
-    let groups = user.groups;
+    let users = group.users.users;
     body.variables.authDomainId = authDomainId;
-    body.variables.userId = user.id;
-    body.variables.groupsCursor = user.groups.nextCursor;
+    body.variables.groupId = group.id;
+    body.variables.usersCursor = group.users.nextCursor;
     options.body = JSON.stringify(body);
     do {
+      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  // TODO
       let response = await $http.post(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
         console.error(responseBody.errors);
       }
-      groups = groups.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users[0].groups);
-      body.variables.groupsCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users[0].groups.nextCursor;
-    } while (body.variables.groupsCursor)
-    return groups;
+      users = users.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.users);
+      body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.nextCursor;
+      options.body = JSON.stringify(body);
+      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);  // TODO
+    } while (body.variables.usersCursor)
+    return users;
   } catch (error) {
-    console.error('getUserGroupsByCursor():', error)
+    console.error('getGroupUsersByCursor():', error)
   }
 }
 
