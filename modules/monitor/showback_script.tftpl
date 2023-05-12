@@ -356,6 +356,7 @@ function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdT
 function buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap) {
   let emailToUserAndGroupsMap = new Map();
   for (const [groupId, group] of groupIdToGroupAndUsersMap) {
+    if (!group.users) continue;  // Groups may have zero users
     for (let user of group.users.users) {
       if (emailToUserAndGroupsMap.has(user.email)) {
         user = emailToUserAndGroupsMap.get(user.email);
@@ -1167,7 +1168,7 @@ async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
         options.body = JSON.stringify(body);
         // Filter groups with user pagination
         const groupsWithNextCursorUser = groups.filter(group => {
-          return group.users.nextCursor;
+          return group.users ? group.users.nextCursor : null;  // Groups may have zero users
         })
         for (const group of groupsWithNextCursorUser) { // Ghastly nested pagination in the GraphQL! :O
           let users = group.users.users;
