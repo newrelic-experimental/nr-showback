@@ -244,7 +244,7 @@ async function getOrgAccounts() {
           actor {
             organization {
               accountManagement {
-                managedAccounts {
+                managedAccounts(isCanceled: false) {
                   name
                   id
                   regionCode
