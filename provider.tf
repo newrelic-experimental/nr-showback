@@ -4,7 +4,7 @@ terraform {
   required_providers {
     newrelic = {
       source  = "newrelic/newrelic"
-      version = "~> 3.4.2, <4.0.0"
+      version = "~> 3.11.0, <4.0.0"
     }
   }
 }
