@@ -21,7 +21,6 @@ if (region === 'US') {
   var nerdGraphEndpoint = 'https://api.eu.newrelic.com/graphql';
   var eventApiEndpoint = 'https://insights-collector.eu01.nr-data.net';
   var metricApiEndpoint = 'https://metric-api.eu.newrelic.com/metric/v1';
-  
 } else { // default to US
   var nerdGraphEndpoint = 'https://api.newrelic.com/graphql';
   var eventApiEndpoint = 'https://insights-collector.newrelic.com';
@@ -86,18 +85,18 @@ async function processShowback() {
   let emailToUserAndGroupsMap = buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap);  // Contains user:groups relationships
   console.log('processShowback(): buildEmailToUserAndGroupsMap:', emailToUserAndGroupsMap);
 
-  // Enrich users map
-  emailToUserAndGroupsMap = await enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap);
-  console.log('processShowback(): emailToUserAndGroupsMap:', emailToUserAndGroupsMap);
+  // Enrich, and consolidate (by case email insensitive) users map
+  let { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap } = await enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap);
+  console.log('processShowback(): enrichedEmailToUserAndGroupsMap:', enrichedEmailToUserAndGroupsMap, 'consolidatedEmailToUserAndGroupsMap:', consolidatedEmailToUserAndGroupsMap);
 
-  // Build a map of users by email to their accounts
-  let emailToAccountsMap = buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
+  // Build a map of users by email to their accounts, and a case insensitive map too
+  let { emailToAccountsMap, consolidatedEmailToAccountsMap } = buildEmailToAccountsMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
 
   // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
-  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserAndGroupsMap);
+  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountsMap, consolidatedEmailToUserAndGroupsMap);
 
   // Build a map of accounts, by id, to their users
-  let accountIdToUsersMap = buildAccountToUsersMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
+  let accountIdToUsersMap = buildAccountToUsersMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
 
   // Get the current time
   const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
@@ -106,13 +105,13 @@ async function processShowback() {
   postDepartmentShowback(departmentToUserTypeCountsMap, currentTimestamp);
 
   // Create Showback_AccountUsers in NRDB
-  let accountUsersArray = postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
+  let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
 
   // Create showback.account metrics in NRDB
   postAccounts(accountIdToUsersMap, accountIdToNameMap, currentTimestamp);
 
   // Build a UniqueUsersArray
-  let uniqueUsersArray = buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap);
+  let uniqueUsersArray = buildUniqueUsersArray(enrichedEmailToUserAndGroupsMap, emailToDepartmentSetMap);
 
   // Create Showback_UniqueUsers in NRDB
   postUniqueUsers(uniqueUsersArray);
@@ -153,8 +152,8 @@ function buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap)
       userTierName = 'Core';
     }
     let departmentSet = null;
-    if (emailToDepartmentSetMap.has(email)) {
-      departmentSet = JSON.stringify(Array.from(emailToDepartmentSetMap.get(email).values()));
+    if (emailToDepartmentSetMap.has(email.toLowerCase())) {
+      departmentSet = JSON.stringify(Array.from(emailToDepartmentSetMap.get(email.toLowerCase()).values()));
     }
     let uniqueUser = {
       email: user.email,
@@ -382,7 +381,7 @@ function buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap) {
  * Enrich a map of users (by email) with additional user details.
  * @param {*} authDomainsArray an array of auth domains
  * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
- * @returns an enriched map of users (by email) to their user details and groups.
+ * @returns an object containing: an enriched map of users (by email) to their user details and groups, and a consolidated map of users (by case insensitive email) to their user details and groups.
  */
 async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap) {
   const body = {
@@ -435,6 +434,8 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
   };
 
   try {
+    let enrichedEmailToUserAndGroupsMap = new Map();
+    let consolidatedEmailToUserAndGroupsMap = new Map();
     for (const authDomain of authDomainsArray) {
       body.variables.authDomainId = authDomain.id;
       options.body = JSON.stringify(body);
@@ -456,12 +457,55 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
       // Enrich emailToUserAndGroupsMap with additional user data
       for (const user of users) {
         let originalUser = emailToUserAndGroupsMap.get(user.email);
-        let enrichedUser = Object.assign(user, originalUser);
-        emailToUserAndGroupsMap.set(user.email, enrichedUser);
+        let enrichedUser = Object.assign(user, originalUser);  // Copy all enumerable own properties from originalUser to user
+        enrichedEmailToUserAndGroupsMap.set(user.email, enrichedUser);
+
+        // Consolidate users with multiple email cases (email address, user type, last active time, and groups)
+        let caseInsensitiveEmail = user.email.toLowerCase();
+        if (consolidatedEmailToUserAndGroupsMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
+          let consolidatedUser = consolidatedEmailToUserAndGroupsMap.get(caseInsensitiveEmail);
+          // Consolidate to a case insensitive email address
+          consolidatedUser.email = caseInsensitiveEmail;
+          // Consolidate the user type
+          if (consolidatedUser.type.displayName == 'Basic' && enrichedUser.type.displayName == 'Core') {
+            consolidatedUser.type = enrichedUser.type;  // Update the type to Core
+            consolidatedUser.id = enrichedUser.id;
+            consolidatedUser.name = enrichedUser.name;
+            consolidatedUser.timeZone = enrichedUser.timeZone;
+          } else if ((consolidatedUser.type.displayName == 'Basic' || consolidatedUser.type.displayName == 'Core') && enrichedUser.type.displayName == 'Full platform') {
+            consolidatedUser.type = enrichedUser.type;  // Update the user type to Full
+            consolidatedUser.id = enrichedUser.id;
+            consolidatedUser.name = enrichedUser.name;
+            consolidatedUser.timeZone = enrichedUser.timeZone;
+          }
+          // Consolidate to the latest active time
+          if (enrichedUser.lastActive) {
+            if (consolidatedUser.lastActive) {
+              // Set the latest of the two last active times
+              let enrichedLastActiveMillis = new Date(enrichedUser.lastActive).getTime();
+              let consolidatedLastActiveMillis = new Date(consolidatedUser.lastActive).getTime();
+              if (enrichedLastActiveMillis >= consolidatedLastActiveMillis) consolidatedUser.lastActive = enrichedUser.lastActive;
+            } else {  // Update to the enriched last active time
+              consolidatedUser.lastActive = enrichedUser.lastActive;
+            }
+          }
+          // Consolidate groups
+          let consolidatedGroupsSet = consolidatedUser.groups && consolidatedUser.groups.groups ? new Set(consolidatedUser.groups.groups) : new Set();
+          let enrichedGroupsSet = enrichedUser.groups && enrichedUser.groups.groups ? new Set(enrichedUser.groups.groups) : new Set();
+          if (consolidatedUser.groups) {
+            consolidatedUser.groups.groups = Array.from(new Set([...consolidatedGroupsSet, ...enrichedGroupsSet]));
+          } else {
+            consolidatedUser.groups = new Object();
+            consolidatedUser.groups.groups = Array.from(new Set([...consolidatedGroupsSet, ...enrichedGroupsSet]));
+          }
+        } else {  // This email address has not been encountered yet
+          consolidatedEmailToUserAndGroupsMap.set(caseInsensitiveEmail, enrichedUser);
+        }
       }
     };
-    console.log('enrichEmailToUserAndGroupsMap(): emailToUserAndGroupsMap:', emailToUserAndGroupsMap);
-    return emailToUserAndGroupsMap;
+    console.log('enrichEmailToUserAndGroupsMap(): enrichedEmailToUserAndGroupsMap:', enrichedEmailToUserAndGroupsMap);
+    console.log('enrichEmailToUserAndGroupsMap(): consolidatedEmailToUserAndGroupsMap:', consolidatedEmailToUserAndGroupsMap);
+    return { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap };
   } catch (error) {
     console.error('enrichEmailToUserAndGroupsMap():', error);
   }
@@ -473,41 +517,50 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
  * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
  * @param {*} accountIdToNameMap a map of account ids to account names.
- * @returns a map of users (by email) to their accounts.
+ * @returns an object containing: a map of users (by email) to their accounts, and a consolidated map of users (by case insensitive email) to their accounts.
  */
 function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap) {
   let emailToAccountsMap = new Map();
-  let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
+  let consolidatedEmailToAccountsMap = new Map();
+  let ignoredGroups = [ 
+      ];
   for (const [email, user] of emailToUserAndGroupsMap) {
     let accountSet = new Set();
     if (!user.groups) {
-      console.error('buildEmailToAccountsMap(): User has no groups', JSON.stringify(user, null, 4));
-      continue;
-    }
-    for (const group of user.groups.groups) {
-      // Check whether to ignore the group, continue if it is to be ignored
-      if (ignoredGroups.includes(group.displayName)) {
-        continue;
-      }
-      if (groupIdToRolesMap.has(group.id)) {
-        let roles = groupIdToRolesMap.get(group.id);
-        for (const role of roles) {
-          if (role.accountId) {
-            let accountName = accountIdToNameMap.get(role.accountId);
-            accountSet.add(accountName);
-          } else if (role.organizationId) {
-            console.log('buildEmailToAccountsMap(): Role associated with an organization, not account', role);
-          } else {
-            console.error('buildEmailToAccountsMap(): Role not associated with either an account or organization', role);
-          }
+      console.error('buildEmailToAccountsMap(): User has no groups (check email case)', JSON.stringify(user, null, 4));
+    } else {
+      for (const group of user.groups.groups) {
+        // Check whether to ignore the group, continue if it is to be ignored
+        if (ignoredGroups.includes(group.displayName)) {
+          continue;
         }
-      } else {
-        console.error('buildEmailToAccountsMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+        if (groupIdToRolesMap.has(group.id)) {
+          let roles = groupIdToRolesMap.get(group.id);
+          for (const role of roles) {
+            if (role.accountId) {
+              let accountName = accountIdToNameMap.get(role.accountId);
+              accountSet.add(accountName);
+            } else if (role.organizationId) {
+              console.log('buildEmailToAccountsMap(): Role associated with an organization, not account', role);
+            } else {
+              console.error('buildEmailToAccountsMap(): Role not associated with either an account or organization', role);
+            }
+          }
+        } else {
+          console.error('buildEmailToAccountsMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+        }
       }
     }
     emailToAccountsMap.set(email, accountSet);
+    let caseInsensitiveEmail = email.toLowerCase();
+    if (consolidatedEmailToAccountsMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
+      let existingAccountSet = consolidatedEmailToAccountsMap.get(caseInsensitiveEmail);
+      consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, new Set([...accountSet, ...existingAccountSet]));
+    } else {
+      consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, accountSet);
+    }
   }
-  return emailToAccountsMap;
+  return { emailToAccountsMap, consolidatedEmailToAccountsMap };
 }
 
 
@@ -521,7 +574,6 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
   let accountIdToUsersMap = new Map();
   let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
   for (const [email, user] of emailToUserAndGroupsMap) {
-    let userSet = new Set();
     if (!user.groups) {
       console.log('buildEmailToAccountsMap(): User has no groups', JSON.stringify(user, null, 4));
       continue;
@@ -557,15 +609,15 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
 
 /**
  * Build a map of departments to their user type counts.
- * @param {*} emailToAccountsMap a map of users (by email) to their accounts.
- * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
+ * @param {*} consolidatedEmailToAccountsMap a (case insensitive) map of users (by email) to their accounts.
+ * @param {*} consolidatedEmailToUserAndGroupsMap a (case insensitive) map of users (by email) to their user details and groups.
  * @returns a map of departments to their user type counts, and a map of user to departments.
  */
-function buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserAndGroupsMap) {
+function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountsMap, consolidatedEmailToUserAndGroupsMap) {
   let departmentToUserTypeCountsMap = new Map();
   let emailToDepartmentSetMap = new Map();
-  let ignoreNewRelicUsers = ${SHOWBACK_IGNORE_NEWRELIC_USERS};
-  for (const [email, accountSet] of emailToAccountsMap) {
+  let ignoreNewRelicUsers = true;
+  for (const [email, accountSet] of consolidatedEmailToAccountsMap) {
     let departmentSet = new Set();
     for (const account of accountSet) {
       let department = getDepartment(account);
@@ -595,7 +647,7 @@ function buildDepartmentToUserTypeCountsMap(emailToAccountsMap, emailToUserAndGr
     }
 
     // Initialize, or update, an existing department's userCount
-    let user = emailToUserAndGroupsMap.get(email);
+    let user = consolidatedEmailToUserAndGroupsMap.get(email);
     let userType = user.type;
     user.departmentSet = departmentSet;
     for (const department of departmentSet) {
