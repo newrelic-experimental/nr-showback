@@ -461,7 +461,7 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
         enrichedEmailToUserAndGroupsMap.set(user.email, enrichedUser);
 
         // Consolidate users with multiple email cases (email address, user type, last active time, and groups)
-        let caseInsensitiveEmail = user.email.toLowerCase();
+        let caseInsensitiveEmail = user.email?.toLowerCase();
         if (consolidatedEmailToUserAndGroupsMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
           let consolidatedUser = consolidatedEmailToUserAndGroupsMap.get(caseInsensitiveEmail);
           // Consolidate to a case insensitive email address
