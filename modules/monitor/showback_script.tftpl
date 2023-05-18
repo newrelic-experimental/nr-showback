@@ -152,7 +152,7 @@ function buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap)
       userTierName = 'Core';
     }
     let departmentSet = null;
-    if (emailToDepartmentSetMap.has(email.toLowerCase())) {
+    if (emailToDepartmentSetMap.has(email?.toLowerCase())) {
       departmentSet = JSON.stringify(Array.from(emailToDepartmentSetMap.get(email.toLowerCase()).values()));
     }
     let uniqueUser = {
@@ -370,7 +370,9 @@ function buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap) {
           ]
         };
       }
-      emailToUserAndGroupsMap.set(user.email, user);
+      if (user.email) {
+        emailToUserAndGroupsMap.set(user.email, user);
+      }
     }
   }
   return emailToUserAndGroupsMap;
@@ -458,7 +460,9 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
       for (const user of users) {
         let originalUser = emailToUserAndGroupsMap.get(user.email);
         let enrichedUser = Object.assign(user, originalUser);  // Copy all enumerable own properties from originalUser to user
-        enrichedEmailToUserAndGroupsMap.set(user.email, enrichedUser);
+        if (user.email) {
+          enrichedEmailToUserAndGroupsMap.set(user.email, enrichedUser);
+        }
 
         // Consolidate users with multiple email cases (email address, user type, last active time, and groups)
         let caseInsensitiveEmail = user.email?.toLowerCase();
@@ -555,13 +559,19 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
         }
       }
     }
-    emailToAccountsMap.set(email, accountSet);
-    let caseInsensitiveEmail = email.toLowerCase();
+    if (email) {
+      emailToAccountsMap.set(email, accountSet);
+    }
+    let caseInsensitiveEmail = email?.toLowerCase();
     if (consolidatedEmailToAccountsMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
       let existingAccountSet = consolidatedEmailToAccountsMap.get(caseInsensitiveEmail);
       consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, new Set([...accountSet, ...existingAccountSet]));
     } else {
-      consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, accountSet);
+      if (caseInsensitiveEmail) {
+        consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, accountSet);
+      } else {
+        console.error("buildEmailToAccountsMap(): user has no email address!", user);
+      }
     }
   }
   return { emailToAccountsMap, consolidatedEmailToAccountsMap };
@@ -631,7 +641,9 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountsMap, cons
       console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user", email);
       departmentSet.add(DEPARTMENT_UNASSIGNED);
     }
-    emailToDepartmentSetMap.set(email, departmentSet);
+    if (email) {
+      emailToDepartmentSetMap.set(email, departmentSet);
+    }
 
     // Skip / ignore new relic users for showback reporting by department
     if (ignoreNewRelicUsers) {
@@ -652,27 +664,29 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountsMap, cons
 
     // Initialize, or update, an existing department's userCount
     let user = consolidatedEmailToUserAndGroupsMap.get(email);
-    let userType = user.type;
-    user.departmentSet = departmentSet;
-    for (const department of departmentSet) {
-      if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
-        let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
-        if (userType.displayName === 'Full platform') {
-          userTypeCountsObject.full_platform += proportion;
-        } else if (userType.displayName === 'Core') {
-          userTypeCountsObject.core += proportion;
-        } else if (userType.displayName === 'Basic') {
-          userTypeCountsObject.basic += proportion;
-        } else {
-          console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+    if (user) {
+      let userType = user.type;
+      user.departmentSet = departmentSet;
+      for (const department of departmentSet) {
+        if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
+          let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
+          if (userType.displayName === 'Full platform') {
+            userTypeCountsObject.full_platform += proportion;
+          } else if (userType.displayName === 'Core') {
+            userTypeCountsObject.core += proportion;
+          } else if (userType.displayName === 'Basic') {
+            userTypeCountsObject.basic += proportion;
+          } else {
+            console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+          }
+        } else {  // Initialize the user type counts for the department, and create the map entry
+          let userTypeCountsObject = {
+            full_platform: userType.displayName === 'Full platform' ? proportion : 0,
+            core: userType.displayName === 'Core' ? proportion : 0,
+            basic: userType.displayName === 'Basic' ? proportion : 0
+          };
+          departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
         }
-      } else {  // Initialize the user type counts for the department, and create the map entry
-        let userTypeCountsObject = {
-          full_platform: userType.displayName === 'Full platform' ? proportion : 0,
-          core: userType.displayName === 'Core' ? proportion : 0,
-          basic: userType.displayName === 'Basic' ? proportion : 0
-        };
-        departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
       }
     }
   }
