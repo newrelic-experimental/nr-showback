@@ -499,7 +499,11 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
             consolidatedUser.groups.groups = Array.from(new Set([...consolidatedGroupsSet, ...enrichedGroupsSet]));
           }
         } else {  // This email address has not been encountered yet
-          consolidatedEmailToUserAndGroupsMap.set(caseInsensitiveEmail, enrichedUser);
+          if (caseInsensitiveEmail) {
+            consolidatedEmailToUserAndGroupsMap.set(caseInsensitiveEmail, enrichedUser);
+          } else {
+            console.error('enrichEmailToUserAndGroupsMap(): user', user, 'does not have an email address!')
+          }
         }
       }
     };
