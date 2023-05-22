@@ -1153,6 +1153,16 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       if (errorMessage) {
         reject(errorMessage);
       } else {
+        let hasAccount = false;
+        for (const role of roles) {
+          if (role.accountId) {
+            hasAccount = true;
+            break;
+          }
+        }
+        if (!hasAccount) {
+          console.error('getGroupIdAndRolesObject(): group has no accounts', group);
+        }
         resolve({ groupId: group.id, roles: roles});
       }
     } catch (error) {
