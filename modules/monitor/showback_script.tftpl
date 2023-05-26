@@ -59,10 +59,10 @@ async function processShowback() {
   let managedAccountsArray = await getOrgAccounts();
   console.log('processShowback(): managedAccountsArray:', managedAccountsArray);
 
-  // Build a map of account ids to account names
-  let accountIdToNameMap = new Map();
+  // Build a map of account ids to accounts
+  let accountIdToAccountMap = new Map();
   for (const account of managedAccountsArray) {
-    accountIdToNameMap.set(account.id, account.name);
+    accountIdToAccountMap.set(account.id, account);
   }
 
   // Get an array of auth domains for the organization
@@ -73,9 +73,31 @@ async function processShowback() {
   let authDomainToGroupsMap = await getAuthDomainToGroupsMap(authDomainsArray);
   console.log('processShowback(): authDomainToGroupsMap:', authDomainToGroupsMap);
 
+  // Build a map of group ids to group names
+  let groupIdToGroupNameMap = new Map();
+  for (const authDomain of authDomainToGroupsMap) {
+    for (const group of authDomain[1]) {
+      groupIdToGroupNameMap.set(group.id, group.displayName);
+    }
+  }
+
   // Get a map of groups by id to their roles
   let groupIdToRolesMap = await getGroupIdToRolesMap(authDomainToGroupsMap); // Contains group:account relationships 
   console.log('processShowback(): groupToRolesMap:', groupIdToRolesMap);
+
+  // Check for groups with no roles, roles with no account, and roles that reference a canceled account
+  for (const [groupId, roles] of groupIdToRolesMap) {
+    let groupName = groupIdToGroupNameMap.get(groupId);
+    if (roles.length == 0) console.warn(`processShowback(): group ${groupName} has no roles`);
+    for (const role of roles) {
+      let account = accountIdToAccountMap.get(role.accountId);
+      if (!account) {
+        console.warn(`processShowback(): group ${groupName} has a role ${role.displayName} with no account`);
+      } else if (account.isCanceled) {
+        console.warn(`processShowback(): group ${groupName} has a role ${role.displayName} that references a canceled account ${account.id}, ${account.name}`);
+      }
+    }
+  }
 
   // Get a map of groups by id to their group and users
   let groupIdToGroupAndUsersMap = await getGroupIdToGroupAndUsersMap(authDomainsArray);  // Contains group:users relationships
@@ -90,13 +112,13 @@ async function processShowback() {
   console.log('processShowback(): enrichedEmailToUserAndGroupsMap:', enrichedEmailToUserAndGroupsMap, 'consolidatedEmailToUserAndGroupsMap:', consolidatedEmailToUserAndGroupsMap);
 
   // Build a map of users by email to their accounts, and a case insensitive map too
-  let { emailToAccountsMap, consolidatedEmailToAccountsMap } = buildEmailToAccountsMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
+  let { emailToAccountSetMap, consolidatedEmailToAccountSetMap } = buildEmailToAccountsMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
 
   // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
-  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountsMap, consolidatedEmailToUserAndGroupsMap);
+  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, accountIdToAccountMap);
 
   // Build a map of accounts, by id, to their users
-  let accountIdToUsersMap = buildAccountToUsersMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
+  let accountIdToUsersMap = buildAccountToUsersMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap);
 
   // Get the current time
   const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
@@ -105,10 +127,10 @@ async function processShowback() {
   postDepartmentShowback(departmentToUserTypeCountsMap, currentTimestamp);
 
   // Create Showback_AccountUsers in NRDB
-  let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap);
+  let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
 
   // Create showback.account metrics in NRDB
-  postAccounts(accountIdToUsersMap, accountIdToNameMap, currentTimestamp);
+  postAccounts(accountIdToUsersMap, accountIdToAccountMap, currentTimestamp);
 
   // Build a UniqueUsersArray
   let uniqueUsersArray = buildUniqueUsersArray(enrichedEmailToUserAndGroupsMap, emailToDepartmentSetMap);
@@ -122,10 +144,11 @@ async function processShowback() {
 
 /**
  * Gets the department/cost-center/business-unit to which user on the account with Full platform access or Core should be assigned.
- * @param {*} accountName an account name to be mapped to a department. 
+ * @param {*} account an account to be mapped to a department. 
  * @returns the department to be assigned.
  */
- function getDepartment(accountName) {
+ function getDepartment(account) {
+  let accountName = account.name;
   let department = DEPARTMENT_UNASSIGNED;
   ${SHOWBACK_SWITCH_STATEMENT}
   if (department === DEPARTMENT_UNASSIGNED) console.error("getDepartment(): The department of account", accountName, 'is unassigned');
@@ -243,9 +266,10 @@ async function getOrgAccounts() {
           actor {
             organization {
               accountManagement {
-                managedAccounts(isCanceled: false) {
-                  name
+                managedAccounts {
                   id
+                  isCanceled
+                  name
                   regionCode
                 }
               }
@@ -279,10 +303,10 @@ async function getOrgAccounts() {
  * Post a set of account users to the Showback_AccountUsers data type in NRDB.
  * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
- * @param {*} accountIdToNameMap a map of account ids to account names.
+ * @param {*} accountIdToAccountMap a map of account ids to accounts.
  * @returns an array of account users. 
  */
-function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap) {
+function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap) {
   let accountUsersArray = [];
   for (const [email, user] of emailToUserAndGroupsMap) {
     let lastAccess = new Date(user.lastActive).getTime();
@@ -317,9 +341,13 @@ function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdT
     for (const group of user.groups.groups) {
       if (groupIdToRolesMap.get(group.id)) {
         for (const role of groupIdToRolesMap.get(group.id)) {
+          let account = accountIdToAccountMap.get(role.accountId);
+          if (account?.isCanceled) {
+            continue;
+          }
           let accountUserObject = {
             account_id: role.accountId,
-            account_name: accountIdToNameMap.get(role.accountId),
+            account_name: account?.name,
             // parent_account_id: activeAccountsMap.get(grant.grantedOn.name).parent_account_id,  // No longer available in V2
             email: user.email,
             full_name: user.name,
@@ -524,12 +552,12 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
  * Build a map of users (by email) to their accounts. 
  * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
- * @param {*} accountIdToNameMap a map of account ids to account names.
+ * @param {*} accountIdToAccountMap a map of account ids to accounts.
  * @returns an object containing: a map of users (by email) to their accounts, and a consolidated map of users (by case insensitive email) to their accounts.
  */
-function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToNameMap) {
-  let emailToAccountsMap = new Map();
-  let consolidatedEmailToAccountsMap = new Map();
+function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap) {
+  let emailToAccountSetMap = new Map();
+  let consolidatedEmailToAccountSetMap = new Map();
   let ignoredGroups = [ 
       ];
   for (const [email, user] of emailToUserAndGroupsMap) {
@@ -546,8 +574,10 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
           let roles = groupIdToRolesMap.get(group.id);
           for (const role of roles) {
             if (role.accountId) {
-              let accountName = accountIdToNameMap.get(role.accountId);
-              accountSet.add(accountName);
+              let account = accountIdToAccountMap.get(role.accountId);
+              if (account && !account.isCanceled) {
+                accountSet.add(account);
+              }
             } else if (role.organizationId) {
               console.log('buildEmailToAccountsMap(): Role associated with an organization, not account', role);
             } else {
@@ -560,21 +590,21 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
       }
     }
     if (email) {
-      emailToAccountsMap.set(email, accountSet);
+      emailToAccountSetMap.set(email, accountSet);
     }
     let caseInsensitiveEmail = email?.toLowerCase();
-    if (consolidatedEmailToAccountsMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
-      let existingAccountSet = consolidatedEmailToAccountsMap.get(caseInsensitiveEmail);
-      consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, new Set([...accountSet, ...existingAccountSet]));
+    if (consolidatedEmailToAccountSetMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
+      let existingAccountSet = consolidatedEmailToAccountSetMap.get(caseInsensitiveEmail);
+      consolidatedEmailToAccountSetMap.set(caseInsensitiveEmail, new Set([...accountSet, ...existingAccountSet]));
     } else {
       if (caseInsensitiveEmail) {
-        consolidatedEmailToAccountsMap.set(caseInsensitiveEmail, accountSet);
+        consolidatedEmailToAccountSetMap.set(caseInsensitiveEmail, accountSet);
       } else {
         console.error("buildEmailToAccountsMap(): user has no email address!", user);
       }
     }
   }
-  return { emailToAccountsMap, consolidatedEmailToAccountsMap };
+  return { emailToAccountSetMap: emailToAccountSetMap, consolidatedEmailToAccountSetMap: consolidatedEmailToAccountSetMap };
 }
 
 
@@ -623,17 +653,19 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
 
 /**
  * Build a map of departments to their user type counts.
- * @param {*} consolidatedEmailToAccountsMap a (case insensitive) map of users (by email) to their accounts.
+ * @param {*} consolidatedEmailToAccountSetMap a (case insensitive) map of users (by email) to their accounts.
  * @param {*} consolidatedEmailToUserAndGroupsMap a (case insensitive) map of users (by email) to their user details and groups.
+ * @param {*} accountIdToAccountMap a map of account ids to accounts.
  * @returns a map of departments to their user type counts, and a map of user to departments.
  */
-function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountsMap, consolidatedEmailToUserAndGroupsMap) {
+function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, accountIdToAccountMap) {
   let departmentToUserTypeCountsMap = new Map();
   let emailToDepartmentSetMap = new Map();
   let ignoreNewRelicUsers = true;
-  for (const [email, accountSet] of consolidatedEmailToAccountsMap) {
+  for (const [email, accountSet] of consolidatedEmailToAccountSetMap) {
     let departmentSet = new Set();
     for (const account of accountSet) {
+      if (account?.isCanceled) continue;
       let department = getDepartment(account);
       departmentSet.add(department);
     }
@@ -772,11 +804,11 @@ function getDimensionalMetricObject(name, type, value, timestamp, attributes) {
 /**
  * Post a set of accounts to NRDB, along with assigned user counts by user type.
  * @param {*} accountToUsersMap a map of accounts to their users.
- * @param {*} accountIdToNameMap a map of account ids to account names.
+ * @param {*} accountIdToAccountMap a map of account ids to account names.
  *  * @param {*} timestamp the metric timestamp.
  * @returns an array of accounts.
  */
-function postAccounts(accountToUsersMap, accountIdToNameMap, timestamp) {
+function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
   let accountArray = [];
   for (const [accountId, users] of accountToUsersMap) {
     let basicUserCount = 0, coreUserCount = 0, fullUserCount = 0;
@@ -795,7 +827,7 @@ function postAccounts(accountToUsersMap, accountIdToNameMap, timestamp) {
     accountArray.push(
       {
         "account_id": accountId,
-        "account_name": accountIdToNameMap.get(accountId),
+        "account_name": accountIdToAccountMap.get(accountId)?.name,
         [BASIC_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount,
         [CORE_USER_COUNT_ATTRIBUTE_NAME]: coreUserCount,
         [FULL_USER_COUNT_ATTRIBUTE_NAME]: fullUserCount,
@@ -1057,9 +1089,9 @@ async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
           promises.push(getGroupIdAndRolesObject(authDomain, group));
         };
         // Await all promises  
-        let groupToRolesArray = await Promise.all(promises);
-        for (const groupToRoles of groupToRolesArray) {
-          groupIdToRolesMap.set(groupToRoles.groupId, groupToRoles.roles);
+        let groupIdAndRolesArray = await Promise.all(promises);
+        for (const groupIdAndRolesObject of groupIdAndRolesArray) {
+          groupIdToRolesMap.set(groupIdAndRolesObject.groupId, groupIdAndRolesObject.roles);
         }
         // Wait 0.05 seconds before issuing queries for the next chunk of groups, to avoid hitting the NerdGraph query limit
         await delay(50);
@@ -1073,7 +1105,7 @@ async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
 
 
 /**
- * Get an array of roles for a group.
+ * Get an object relating a group id to its roles.
  * @param {*} authDomain authentication domain for the supplied group.
  * @param {*} group group for which roles are to be retrieved.
  * @returns an object relating a group id to its roles { groupId: group.id, roles: roles}.
