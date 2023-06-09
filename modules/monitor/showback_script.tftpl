@@ -88,13 +88,13 @@ async function processShowback() {
   // Check for groups with no roles, roles with no account, and roles that reference a canceled account
   for (const [groupId, roles] of groupIdToRolesMap) {
     let groupName = groupIdToGroupNameMap.get(groupId);
-    if (roles.length == 0) console.warn(`processShowback(): group ${groupName} has no roles`);
+    if (roles.length == 0) console.warn('processShowback(): group ' + groupName + ' has no roles');
     for (const role of roles) {
       let account = accountIdToAccountMap.get(role.accountId);
       if (!account) {
-        console.warn(`processShowback(): group ${groupName} has a role ${role.displayName} with no account`);
+        console.warn('processShowback(): group ' + groupName + ' has a role ' + role.displayName + ' with no account');
       } else if (account.isCanceled) {
-        console.warn(`processShowback(): group ${groupName} has a role ${role.displayName} that references a canceled account ${account.id}, ${account.name}`);
+        console.warn('processShowback(): group ' + groupName + ' has a role ' + role.displayName + ' that references a canceled account ' + account.id + ', ' + account.name);
       }
     }
   }
