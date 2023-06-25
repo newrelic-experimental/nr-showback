@@ -1187,7 +1187,8 @@ async function getGroupIdAndRolesObject(authDomain, group) {
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
-          console.error(responseBody.errors);
+          errorMessage = responseBody.errors; 
+          console.error("getGroupIdAndRolesObject(): Errors present in response.body");
           break;
         }
         roles = roles.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.roles);
@@ -1195,6 +1196,7 @@ async function getGroupIdAndRolesObject(authDomain, group) {
         options.body = JSON.stringify(body);
       } while (body.variables.rolesCursor)
       if (errorMessage) {
+        console.error('getGroupIdAndRolesObject():', errorMessage, authDomain, group.displayName);
         reject(errorMessage);
       } else {
         let hasAccount = false;
