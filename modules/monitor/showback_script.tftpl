@@ -12,7 +12,7 @@ if (IS_LOCAL_ENV) {
   require("../lib/simulator");
 }
 
-const region = '${NEW_RELIC_REGION}';  // 'US' | 'EU'
+const region = '${tf_new_relic_region}';  // 'US' | 'EU'
 if (region === 'US') {
   var nerdGraphEndpoint = 'https://api.newrelic.com/graphql';
   var eventApiEndpoint = 'https://insights-collector.newrelic.com';
@@ -44,7 +44,7 @@ const FULL_USER_COUNT_ATTRIBUTE_NAME = "fullUserCount";
 const CORE_USER_COUNT_ATTRIBUTE_NAME = "coreUserCount";
 const BASIC_USER_COUNT_ATTRIBUTE_NAME = "basicUserCount";
 const TOTAL_USER_COUNT_ATTRIBUTE_NAME = "totalUserCount";
-const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${SHOWBACK_INSERT_ACCOUNT_ID};  // TODO: Update with reporting account id
+const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${tf_showback_insert_account_id};  // TODO: Update with reporting account id
 
 const CHUNK_SIZE = 100;
 const GQL_API_CHUNK_SIZE = 25;
@@ -150,7 +150,20 @@ async function processShowback() {
  function getDepartment(account) {
   let accountName = account.name;
   let department = DEPARTMENT_UNASSIGNED;
-  ${SHOWBACK_SWITCH_STATEMENT}
+  switch (true) { 
+  %{~ for department in tf_showback_config ~}
+  %{~ for account in department.accounts_in ~}
+    case accountName === "${account}":
+  %{~ endfor ~}
+  %{~ for regex in department.accounts_regex ~}
+    case (new RegExp("${regex}").test(accountName)):
+  %{~ endfor ~}
+      department = "${department.department_name}";
+      break;
+  %{~ endfor ~}
+    default:
+      break;
+  }
   if (department === DEPARTMENT_UNASSIGNED) console.error("getDepartment(): The department of account", accountName, 'is unassigned');
   return department;
 }
@@ -558,8 +571,7 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
 function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap) {
   let emailToAccountSetMap = new Map();
   let consolidatedEmailToAccountSetMap = new Map();
-  let ignoredGroups = [ 
-      ];
+  let ignoredGroups = [ %{~ for index_group, group in tf_showback_ignore_groups ~}%{ if index_group != 0 }, %{ endif }"${group}"%{~ endfor ~} ];
   for (const [email, user] of emailToUserAndGroupsMap) {
     let accountSet = new Set();
     if (!user.groups) {
@@ -616,7 +628,7 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
  */
  function buildAccountToUsersMap(emailToUserAndGroupsMap, groupIdToRolesMap) {
   let accountIdToUsersMap = new Map();
-  let ignoredGroups = ${SHOWBACK_IGNORE_GROUP_ARRAY};
+  let ignoredGroups = [ %{~ for index_group, group in tf_showback_ignore_groups ~}%{ if index_group != 0 }, %{ endif }"${group}"%{~ endfor ~} ];
   for (const [email, user] of emailToUserAndGroupsMap) {
     if (!user.groups) {
       console.log('buildEmailToAccountsMap(): User has no groups', JSON.stringify(user, null, 4));
@@ -661,7 +673,7 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
 function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, accountIdToAccountMap) {
   let departmentToUserTypeCountsMap = new Map();
   let emailToDepartmentSetMap = new Map();
-  let ignoreNewRelicUsers = true;
+  let ignoreNewRelicUsers = ${tf_showback_ignore_newrelic_users};
   for (const [email, accountSet] of consolidatedEmailToAccountSetMap) {
     let departmentSet = new Set();
     for (const account of accountSet) {

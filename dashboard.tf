@@ -7,13 +7,13 @@ locals {
   templatefile_render = templatefile(
    "${path.module}/dashboards/dashboard.json.tftpl",
     {
-     DASHBOARD_NAME = var.dashboard_name
-     ACCOUNT_ID = var.showback_insert_account_id
-     TOTAL_CONSUMPTION_COST_BY_DEPARTMENT_THIS_MONTH = local.total_consumption_cost_by_department_this_month
-     CONSUMPTION_COST_BY_DEPARTMENT_THIS_MONTH = local.consumption_cost_by_department_this_month
-     CORE_USER_USD = var.showback_price.core_user_usd
-     FULL_USER_USD = var.showback_price.full_user_usd
-     GB_INGEST_USD = var.showback_price.gb_ingest_usd
+     tf_dashboard_name = var.dashboard_name
+     tf_account_id = var.showback_insert_account_id
+     tf_total_consumption_cost_by_department_this_month = local.total_consumption_cost_by_department_this_month
+     tf_consumption_cost_by_department_this_month = local.consumption_cost_by_department_this_month
+     tf_core_user_usd = var.showback_price.core_user_usd
+     tf_full_user_usd = var.showback_price.full_user_usd
+     tf_gb_ingest_usd = var.showback_price.gb_ingest_usd
     }
   )
 }
