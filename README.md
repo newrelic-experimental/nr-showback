@@ -45,14 +45,14 @@ Note: You may want to update the version numbers in [provider.tf](provider.tf) a
 
 
 ## Showback configuration
-The showback configuration is entirely within the [terraform.tfvars](terraform.tfvars) file, which is populated with an example config. The configuration contains:
+The showback configuration is entirely within the terraform.tfvars file. Copy [terraform.tfvars.sample](terraform.tfvars.sample), which is populated with an example config to a file named `terraform.tfvars`. Modify the configuration for your account. The configuration contains:
 - `showback_price`: the costs for:
   - full users (`full_user_usd`)
   - core users (`core_user_usd`)
   - billable ingest per GB (`gb_ingest_usd`)
 - `showback_ignore.groups`: whether specific user group membership should be ignored. Some customers grant read-only access to all accounts, which breaks the script’s showback user apportioning
 - `showback_ignore.newrelic`: whether New Relic employees should be ignored in the showback charge, set to `true`, but can be changed
-- `showback_config`: for each department, the `department_name`, and accounts either as a list (`accounts_in`) or as a list of one or more regular expressions (`accounts_regex`)
+- `showback_config`: for each department, the `department_name`, an optional `tier` number (for grouping departments into higher level reporting units), and accounts either as a list (`accounts_in`) or as a list of one or more regular expressions (`accounts_regex`)
 
 
 ## Initialization

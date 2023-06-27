@@ -37,6 +37,7 @@ variable "showback_config" {
   description = "Showback config"
   type = list(object({
     department_name = string
+    tier = optional(number)
     accounts_in = list(string)
     accounts_regex = list(string)
   }))
