@@ -1,6 +1,6 @@
 const IS_LOCAL_ENV = typeof $env === "undefined" || $env === null;
 
-// TODO: Comment the following lines to log debug messages
+// Comment the following lines to log debug messages
 console.log = function() {}
 console.debug = function() {}
 
@@ -44,7 +44,7 @@ const FULL_USER_COUNT_ATTRIBUTE_NAME = "fullUserCount";
 const CORE_USER_COUNT_ATTRIBUTE_NAME = "coreUserCount";
 const BASIC_USER_COUNT_ATTRIBUTE_NAME = "basicUserCount";
 const TOTAL_USER_COUNT_ATTRIBUTE_NAME = "totalUserCount";
-const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${tf_showback_insert_account_id};  // TODO: Update with reporting account id
+const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${tf_showback_insert_account_id};
 
 const CHUNK_SIZE = 100;
 const GQL_API_CHUNK_SIZE = 25;
@@ -317,7 +317,7 @@ async function getOrgAccounts() {
   };
 
   try {
-    console.debug('getOrgAccounts() $http.post');  // TODO
+    console.debug('getOrgAccounts() $http.post');
     let response = await $http.post(options);
     let responseBody = JSON.parse(response.body);
     if (responseBody.hasOwnProperty('errors')) {
@@ -504,7 +504,7 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
       console.log('enrichEmailToUserAndGroupsMap(): authDomain.id:', authDomain.id);
       let users = [];
       do {
-        console.debug('enrichEmailToUserAndGroupsMap() $http.post, Auth Domain:' + authDomain.name);  // TODO
+        console.debug('enrichEmailToUserAndGroupsMap() $http.post, Auth Domain:' + authDomain.name);
         let response = await $http.post(options);
         console.log('enrichEmailToUserAndGroupsMap(): options:', options);
         let responseBody = JSON.parse(response.body);
@@ -916,7 +916,7 @@ async function postCustomEvents(body) {
     }
   }
   try {
-    console.debug('postCustomEvents() $http.post');  // TODO
+    console.debug('postCustomEvents() $http.post');
     return await $http.post(options);
   } catch (e) {
     console.error('postCustomEvents():', e);
@@ -945,7 +945,7 @@ async function postCustomEvents(body) {
     }
   }
   try {
-    console.debug('postMetrics() $http.post');  // TODO
+    console.debug('postMetrics() $http.post');
     return await $http.post(options);
   } catch (e) {
     console.error('postMetrics():', e);
@@ -1008,7 +1008,7 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
       do {
         body.variables.authDomainId = authDomain.id;
         options.body = JSON.stringify(body);
-        console.debug('getAuthDomainToGroupsMap() $http.post', authDomain.name);  // TODO
+        console.debug('getAuthDomainToGroupsMap() $http.post', authDomain.name);
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -1071,7 +1071,7 @@ async function getAuthDomainsArray() {
   try {
     let authDomains = [];
     do {
-      console.debug('getAuthDomainsArray() $http.post');  // TODO
+      console.debug('getAuthDomainsArray() $http.post');
       let response = await $http.post(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
@@ -1236,7 +1236,7 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       options.body = JSON.stringify(body);
       let errorMessage = null;
       do {
-        console.debug('getGroupIdAndRolesObject() $http.post', authDomain, group.displayName, body.variables.rolesCursor);  // TODO
+        console.debug('getGroupIdAndRolesObject() $http.post', authDomain, group.displayName, body.variables.rolesCursor);
         let response = await $http.post(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -1335,7 +1335,7 @@ async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
       console.log('getGroupIdToGroupAndUsersMap(): authDomain.id:', authDomain.id);
       let groups = [];
       do {
-        console.debug('getGroupIdToGroupAndUsersMap() $http.post, Auth Domain:' + authDomain.name);  // TODO
+        console.debug('getGroupIdToGroupAndUsersMap() $http.post, Auth Domain:' + authDomain.name);
         let response = await $http.post(options);
         console.log('getGroupIdToGroupAndUsersMap(): options:', options);
         let responseBody = JSON.parse(response.body);
@@ -1431,7 +1431,7 @@ async function getGroupUsersByCursor(authDomainId, group) {
     body.variables.usersCursor = group.users.nextCursor;
     options.body = JSON.stringify(body);
     do {
-      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  // TODO
+      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  //
       let response = await $http.post(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
@@ -1440,7 +1440,7 @@ async function getGroupUsersByCursor(authDomainId, group) {
       users = users.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.users);
       body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.nextCursor;
       options.body = JSON.stringify(body);
-      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);  // TODO
+      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);
     } while (body.variables.usersCursor)
     return users;
   } catch (error) {
