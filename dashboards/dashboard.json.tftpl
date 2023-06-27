@@ -380,7 +380,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Showback_AccountUsers SELECT uniqueCount(account_name) AS Accounts since 1 day ago"
+                "query": "FROM Metric SELECT uniqueCount(account) AS Accounts SINCE 1 day ago WHERE metricName = 'showback.account.totaluser.count' LIMIT MAX"
               }
             ],
             "platformOptions": {

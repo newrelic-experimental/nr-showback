@@ -858,16 +858,19 @@ function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
         console.error('postAccounts(): Unknown user type:', userType)
       }
     }
-    accountArray.push(
-      {
-        "account_id": accountId,
-        "account_name": accountIdToAccountMap.get(accountId)?.name,
-        [BASIC_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount,
-        [CORE_USER_COUNT_ATTRIBUTE_NAME]: coreUserCount,
-        [FULL_USER_COUNT_ATTRIBUTE_NAME]: fullUserCount,
-        [TOTAL_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount + coreUserCount + fullUserCount
-      }  
-    )
+    let account = accountIdToAccountMap.get(accountId);
+    if (account && !account.isCanceled) {
+      accountArray.push(
+        {
+          "account_id": accountId,
+          "account_name": account?.name,
+          [BASIC_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount,
+          [CORE_USER_COUNT_ATTRIBUTE_NAME]: coreUserCount,
+          [FULL_USER_COUNT_ATTRIBUTE_NAME]: fullUserCount,
+          [TOTAL_USER_COUNT_ATTRIBUTE_NAME]: basicUserCount + coreUserCount + fullUserCount
+        }
+      )
+    }
   }
 
   /*
