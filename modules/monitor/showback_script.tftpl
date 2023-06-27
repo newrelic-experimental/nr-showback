@@ -49,6 +49,8 @@ const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${tf_showback_insert_account_id};  
 const CHUNK_SIZE = 100;
 const GQL_API_CHUNK_SIZE = 25;
 
+const DEFAULT_DEPT_TIER = 1;
+
 
 /**
  * Process showback (https://en.wikipedia.org/wiki/IT_chargeback_and_showback) for an organization, as associated with the supplied user api key. 
@@ -114,6 +116,9 @@ async function processShowback() {
   // Build a map of users by email to their accounts, and a case insensitive map too
   let { emailToAccountSetMap, consolidatedEmailToAccountSetMap } = buildEmailToAccountsMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
 
+  // Get department to tier map
+  let departmentToTierMap = getDepartmentToTierMap();
+
   // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
   let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, accountIdToAccountMap);
 
@@ -124,7 +129,7 @@ async function processShowback() {
   const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
 
   // Create showback.department and aggregated showback.organization metrics in NRDB
-  postDepartmentShowback(departmentToUserTypeCountsMap, currentTimestamp);
+  postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierMap, currentTimestamp);
 
   // Create Showback_AccountUsers in NRDB
   let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
@@ -166,6 +171,19 @@ async function processShowback() {
   }
   if (department === DEPARTMENT_UNASSIGNED) console.error("getDepartment(): The department of account", accountName, 'is unassigned');
   return department;
+}
+
+
+/**
+ * Gets the department to tier map.
+ * @returns the department to tier map.
+ */
+function getDepartmentToTierMap() {
+  return new Map([
+    %{~ for index_department, department in tf_showback_config ~}
+    [ "${department.department_name}", ${department.tier} ]%{~ if index_department <= length(department) },%{~ endif }
+    %{~ endfor ~}
+  ]);
 }
 
 
@@ -742,10 +760,11 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
 /**
  * Post a set of departments to NRDB.
  * @param {*} departmentToUserTypeCountsMap a map of departments to their user type counts.
+ * @param {*} departmentToTierMap a map of departments to their tier.
  * @param {*} timestamp the metric timestamp.
  * @returns an array of departments and their counts of full platform, core and basic users.
  */
-function postDepartmentShowback(departmentToUserTypeCountsMap, timestamp) {
+function postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierMap, timestamp) {
   let departmentArray = Array.from(departmentToUserTypeCountsMap, ([department, userTypesCountObject]) => ({
     [DEPARTMENT_ATTRIBUTE_NAME]: department,
     [FULL_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.full_platform,
@@ -761,20 +780,22 @@ function postDepartmentShowback(departmentToUserTypeCountsMap, timestamp) {
   let totalBasicUserCount = 0, totalCoreUserCount = 0, totalFullUserCount = 0, totalUserCount = 0;
   // By department metrics
   for (const [department, userTypeCountsObject] of departmentToUserTypeCountsMap) {
-    let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department });
+    let tier = departmentToTierMap.get(department);
+    tier ??= DEFAULT_DEPT_TIER;  // Nullish coalescing assignment, to assign the default tier (1)
+    let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department, "tier": tier });
     metrics.push(basicUserDeptMetric);
     totalBasicUserCount += userTypeCountsObject.basic;
 
-    let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department });
+    let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department, "tier": tier });
     metrics.push(coreUserDeptMetric);
     totalCoreUserCount += userTypeCountsObject.core;
 
-    let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department });
+    let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department, "tier": tier });
     metrics.push(fullUserDeptMetric);
     totalFullUserCount += userTypeCountsObject.full_platform;
 
     let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
-    let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department });
+    let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department, "tier": tier });
     metrics.push(totalUserDeptMetric);
     totalUserCount += totalUserDeptCount;
   }

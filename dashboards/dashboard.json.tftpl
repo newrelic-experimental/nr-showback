@@ -86,7 +86,7 @@
             "nrqlQueries": [
               {
                 "accountId":  ${tf_account_id},
-                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -116,7 +116,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -146,7 +146,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -176,7 +176,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department LIMIT MAX"
+                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
