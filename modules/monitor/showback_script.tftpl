@@ -48,6 +48,7 @@ const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${tf_showback_insert_account_id};  
 
 const CHUNK_SIZE = 100;
 const GQL_API_CHUNK_SIZE = 25;
+const MAX_RETRIES = 3;
 
 const DEFAULT_DEPT_TIER = 1;
 
@@ -310,7 +311,7 @@ async function getOrgAccounts() {
       `
     }),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
@@ -489,7 +490,7 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
     },
     body: JSON.stringify(),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
@@ -910,7 +911,7 @@ async function postCustomEvents(body) {
       'Content-Type': 'application/json'
     },
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   }
@@ -939,7 +940,7 @@ async function postCustomEvents(body) {
       'Content-Type': 'application/json'
     },
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   }
@@ -995,7 +996,7 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
@@ -1062,7 +1063,7 @@ async function getAuthDomainsArray() {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
@@ -1119,7 +1120,7 @@ async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
       for (const chunkedGroups of chunkedGroupsArray) {  // Blocking
         let promises = [];
         for (const group of chunkedGroups) {
-          promises.push(getGroupIdAndRolesObject(authDomain, group));
+          promises.push(getGroupIdAndRolesObjectWithRetries(authDomain, group));
         };
         // Await all promises  
         let groupIdAndRolesArray = await Promise.all(promises);
@@ -1134,6 +1135,37 @@ async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
   } catch (error) {
     console.error('getGroupIdToRolesMap():', error);
   }
+}
+
+
+/**
+ * Get an object relating a group id to its roles. A wrapper function that retries if the getGroupIdAndRolesObject() function errors.
+ * @param {*} authDomain authentication domain for the supplied group.
+ * @param {*} group group for which roles are to be retrieved.
+ * @returns an object relating a group id to its roles { groupId: group.id, roles: roles}.
+ */
+async function getGroupIdAndRolesObjectWithRetries(authDomain, group) {
+    let success = false;
+    let groupIdAndRolesObject;
+    let retries = 0;
+    let currentError;
+    do {
+      try {
+        groupIdAndRolesObject = await getGroupIdAndRolesObject(authDomain, group);
+        success = true;
+      } catch (error) {
+        console.error("getGroupIdAndRolesObjectWithRetries(): An error occurred:", error);
+        console.error("getGroupIdAndRolesObjectWithRetries(): retry count:", retries);
+        currentError = error;
+        retries++;
+      }
+    } while (!success && retries <= MAX_RETRIES);
+    if (success) {
+      return groupIdAndRolesObject;
+    } else {
+      console.error("getGroupIdAndRolesObjectWithRetries(): max retries exceeded:", MAX_RETRIES);
+      throw currentError;
+    }
 }
 
 
@@ -1191,7 +1223,7 @@ async function getGroupIdAndRolesObject(authDomain, group) {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
@@ -1234,6 +1266,7 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       }
     } catch (error) {
       console.error('getGroupIdAndRolesObject():', error, authDomain, group.displayName);
+      reject(error);
     }
   })
 }
@@ -1289,7 +1322,7 @@ async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
     },
     body: JSON.stringify(),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
@@ -1386,7 +1419,7 @@ async function getGroupUsersByCursor(authDomainId, group) {
     },
     body: JSON.stringify(body),
     retry: { // By default, Got does not retry on POST
-      limit: 3,
+      limit: MAX_RETRIES,
       methods: ['POST']
     }
   };
