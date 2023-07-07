@@ -149,29 +149,43 @@ async function processShowback() {
 
 
 /**
- * Gets the department/cost-center/business-unit to which user on the account with Full platform access or Core should be assigned.
+ * Gets a map of department tier to a map of the count of department/cost-center/business-unit to which user on the account with Full platform access or Core should be assigned.
  * @param {*} account an account to be mapped to a department. 
- * @returns the department to be assigned.
+ * @returns a map of department tier to a map of the count of department/cost-center/business-unit.
  */
- function getDepartment(account) {
-  let accountName = account.name;
-  let department = DEPARTMENT_UNASSIGNED;
-  switch (true) { 
-  %{~ for department in tf_showback_config ~}
-  %{~ for account in department.accounts_in ~}
-    case accountName === "${account}":
-  %{~ endfor ~}
-  %{~ for regex in department.accounts_regex ~}
-    case (new RegExp("${regex}").test(accountName)):
-  %{~ endfor ~}
-      department = "${department.department_name}";
-      break;
-  %{~ endfor ~}
-    default:
-      break;
+function getDepartmentMapping(account) {
+  let departments = ${jsonencode(tf_showback_config)};
+
+  let tierToDeptSetMap = new Map();
+  for (const department of departments) {
+    let deptSet = new Set();
+    for (const accounts_in of department.accounts_in) {
+      if (accounts_in.includes(account.name)) {
+        deptSet.add(department.department_name);
+      }
+    }
+    for (const accounts_regex of department.accounts_regex) {
+      if (new RegExp(accounts_regex).test(account.name)) {
+        deptSet.add(department.department_name);
+      }
+    }
+    if (tierToDeptSetMap.has(department.tier)) {
+      let existingDeptSet = tierToDeptSetMap.get(department.tier);
+      let mergedSet = new Set([...existingDeptSet, ...deptSet])
+      tierToDeptSetMap.set(department.tier, mergedSet);
+    } else {
+      tierToDeptSetMap.set(department.tier, deptSet);
+    }
   }
-  if (department === DEPARTMENT_UNASSIGNED) console.error("getDepartment(): The department of account", accountName, 'is unassigned');
-  return department;
+
+  for (const [tier, deptSetMap] of tierToDeptSetMap) {
+    if (deptSetMap.size == 0) {
+      console.error("getDepartment(): The department of account", account.name, 'is unassigned in tier', tier);
+      tierToDeptSetMap.set(tier, deptSetMap.add(DEPARTMENT_UNASSIGNED));
+    }
+  }
+
+  return tierToDeptSetMap;;
 }
 
 
@@ -317,8 +331,8 @@ async function getOrgAccounts() {
   };
 
   try {
-    console.debug('getOrgAccounts() $http.post');
-    let response = await $http.post(options);
+    console.debug('getOrgAccounts() postWithRetries');
+    let response = await postWithRetries(options);
     let responseBody = JSON.parse(response.body);
     if (responseBody.hasOwnProperty('errors')) {
       console.error(responseBody.errors);
@@ -504,8 +518,8 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
       console.log('enrichEmailToUserAndGroupsMap(): authDomain.id:', authDomain.id);
       let users = [];
       do {
-        console.debug('enrichEmailToUserAndGroupsMap() $http.post, Auth Domain:' + authDomain.name);
-        let response = await $http.post(options);
+        console.debug('enrichEmailToUserAndGroupsMap() postWithRetries, Auth Domain:' + authDomain.name);
+        let response = await postWithRetries(options);
         console.log('enrichEmailToUserAndGroupsMap(): options:', options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -695,44 +709,39 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
   let ignoreNewRelicUsers = ${tf_showback_ignore_newrelic_users};
   for (const [email, accountSet] of consolidatedEmailToAccountSetMap) {
     let departmentSet = new Set();
+    let tierToDeptSetMap = new Map();
     for (const account of accountSet) {
       if (account?.isCanceled) continue;
-      let department = getDepartment(account);
-      departmentSet.add(department);
+      let map = getDepartmentMapping(account);
+      for (const [tier, deptSet] of map) {
+        let existingDeptSet = tierToDeptSetMap.get(tier);
+        if (existingDeptSet) {
+          tierToDeptSetMap.set(tier, new Set([...existingDeptSet, ...deptSet]))
+        } else {
+          tierToDeptSetMap.set(tier, deptSet);
     }
-    if (departmentSet.size == 0) {
-      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user", email);
-      departmentSet.add(DEPARTMENT_UNASSIGNED);
+      }
+    }
+    for (const [tier, deptSet] of tierToDeptSetMap) {
+      departmentSet = new Set([...departmentSet, ...deptSet]);
+      if (deptSet.size == 1 && deptSet.has(DEPARTMENT_UNASSIGNED)) {
+        console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email, "and tier:", tier);
+      }
     }
     if (email) {
       emailToDepartmentSetMap.set(email, departmentSet);
     }
 
-    // Skip / ignore new relic users for showback reporting by department
-    if (ignoreNewRelicUsers) {
-      if ((/@newrelic.com/).test(email)) {
-        console.debug("Ignoring user for showback reporting by department:", email);
-        continue;
-      }
-    }
-
-    // Apportion the user to each department they are a member of proportionally,
-    // e.g. if the user is a full_platform user and in two departments,
-    // add 0.5 of a full_platform user to each department.
-    let proportion = 1/departmentSet.size;
-    if (proportion < 1) {
-      // The user is a member of accounts under two or more different departments, so split equally
-      console.log("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments:", departmentSet, "apportioning equally across each department");
-    }
-
-    // Initialize, or update, an existing department's userCount
-    let user = consolidatedEmailToUserAndGroupsMap.get(email);
-    if (user) {
-      let userType = user.type;
-      user.departmentSet = departmentSet;
-      for (const department of departmentSet) {
-        if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
-          let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
+    // Handle users with no department
+    if (departmentSet.size == 0) {
+      let proportion = 1;
+      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email);
+      let user = consolidatedEmailToUserAndGroupsMap.get(email);
+      if (user) {
+        let userType = user.type;
+        user.departmentSet = new Set([DEPARTMENT_UNASSIGNED]);
+        if (departmentToUserTypeCountsMap.has(DEPARTMENT_UNASSIGNED)) {  // Update the map entry with the proportion for this user
+          let userTypeCountsObject = departmentToUserTypeCountsMap.get(DEPARTMENT_UNASSIGNED);
           if (userType.displayName === 'Full platform') {
             userTypeCountsObject.full_platform += proportion;
           } else if (userType.displayName === 'Core') {
@@ -748,7 +757,54 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
             core: userType.displayName === 'Core' ? proportion : 0,
             basic: userType.displayName === 'Basic' ? proportion : 0
           };
-          departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
+          departmentToUserTypeCountsMap.set(DEPARTMENT_UNASSIGNED, userTypeCountsObject);
+        }
+      }
+    }
+
+    // Skip / ignore new relic users for showback reporting by department
+    if (ignoreNewRelicUsers) {
+      if ((/@newrelic.com/).test(email)) {
+        console.debug("Ignoring user for showback reporting by department:", email);
+        continue;
+      }
+    }
+
+    for (const [tier, deptSet] of tierToDeptSetMap) {
+      // Apportion the user to each department they are a member of proportionally,
+      // e.g. if the user is a full_platform user and in two departments,
+      // add 0.5 of a full_platform user to each department.
+      let proportion = 1/deptSet.size;
+      if (proportion < 1) {
+        // The user is a member of accounts under two or more different departments, so split equally
+        console.log("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments:", departmentSet, "apportioning equally across each department");
+      }
+
+      // Initialize, or update, an existing department's userCount
+      let user = consolidatedEmailToUserAndGroupsMap.get(email);
+      if (user) {
+        let userType = user.type;
+          user.departmentSet = deptSet;
+          for (const department of deptSet) {
+          if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
+            let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
+            if (userType.displayName === 'Full platform') {
+              userTypeCountsObject.full_platform += proportion;
+            } else if (userType.displayName === 'Core') {
+              userTypeCountsObject.core += proportion;
+            } else if (userType.displayName === 'Basic') {
+              userTypeCountsObject.basic += proportion;
+            } else {
+              console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+            }
+          } else {  // Initialize the user type counts for the department, and create the map entry
+            let userTypeCountsObject = {
+              full_platform: userType.displayName === 'Full platform' ? proportion : 0,
+              core: userType.displayName === 'Core' ? proportion : 0,
+              basic: userType.displayName === 'Basic' ? proportion : 0
+            };
+            departmentToUserTypeCountsMap.set(department, userTypeCountsObject);
+          }
         }
       }
     }
@@ -778,37 +834,58 @@ function postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierM
    * Dimensional metrics
    */
   let metrics = new Array();
-  let totalBasicUserCount = 0, totalCoreUserCount = 0, totalFullUserCount = 0, totalUserCount = 0;
+  let tierToAggregateUserCountObjectMap = new Map();
   // By department metrics
   for (const [department, userTypeCountsObject] of departmentToUserTypeCountsMap) {
     let tier = departmentToTierMap.get(department);
     tier ??= DEFAULT_DEPT_TIER;  // Nullish coalescing assignment, to assign the default tier (1)
+    let aggregateUserCountObject;
+    if (tierToAggregateUserCountObjectMap.has(tier)) {
+      aggregateUserCountObject = tierToAggregateUserCountObjectMap.get(tier);
+    } else {
+      aggregateUserCountObject = {
+        basic: 0,
+        core: 0,
+        full: 0,
+        total: 0
+      }
+    }
     let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department, "tier": tier });
     metrics.push(basicUserDeptMetric);
-    totalBasicUserCount += userTypeCountsObject.basic;
+    aggregateUserCountObject.basic += userTypeCountsObject.basic;
 
     let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department, "tier": tier });
     metrics.push(coreUserDeptMetric);
-    totalCoreUserCount += userTypeCountsObject.core;
+    aggregateUserCountObject.core += userTypeCountsObject.core;
 
     let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department, "tier": tier });
     metrics.push(fullUserDeptMetric);
-    totalFullUserCount += userTypeCountsObject.full_platform;
+    aggregateUserCountObject.full += userTypeCountsObject.full_platform;
 
     let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
     let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department, "tier": tier });
     metrics.push(totalUserDeptMetric);
-    totalUserCount += totalUserDeptCount;
+    aggregateUserCountObject.total += totalUserDeptCount;
+    tierToAggregateUserCountObjectMap.set(tier, aggregateUserCountObject);
   }
   // Aggregates metrics
-  let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", totalBasicUserCount, timestamp, {});
-  metrics.push(totalBasicUserMetric);
-  let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", totalCoreUserCount, timestamp, {});
-  metrics.push(totalCoreUserMetric);
-  let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", totalFullUserCount, timestamp, {});
-  metrics.push(totalFullUserMetric);
-  let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", totalUserCount, timestamp, {});
-  metrics.push(totalUserMetric);
+  for (const [tier, aggregateUserCountObject] of tierToAggregateUserCountObjectMap) {
+    if (tier > 1) {
+      let userTypeCountsObject = departmentToUserTypeCountsMap.get(DEPARTMENT_UNASSIGNED);
+      aggregateUserCountObject.basic += userTypeCountsObject.basic;
+      aggregateUserCountObject.core += userTypeCountsObject.core;
+      aggregateUserCountObject.full += userTypeCountsObject.full_platform;
+      aggregateUserCountObject.total += userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
+    }
+    let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, { "tier": tier });
+    metrics.push(totalBasicUserMetric);
+    let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, { "tier": tier });
+    metrics.push(totalCoreUserMetric);
+    let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", aggregateUserCountObject.full, timestamp, { "tier": tier });
+    metrics.push(totalFullUserMetric);
+    let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, { "tier": tier });
+    metrics.push(totalUserMetric);
+  }
   chunkAndPostMetrics(metrics);
   
   return departmentArray;
@@ -919,8 +996,8 @@ async function postCustomEvents(body) {
     }
   }
   try {
-    console.debug('postCustomEvents() $http.post');
-    return await $http.post(options);
+    console.debug('postCustomEvents() postWithRetries');
+    return await postWithRetries(options);
   } catch (e) {
     console.error('postCustomEvents():', e);
   }
@@ -948,8 +1025,8 @@ async function postCustomEvents(body) {
     }
   }
   try {
-    console.debug('postMetrics() $http.post');
-    return await $http.post(options);
+    console.debug('postMetrics() postWithRetries');
+    return await postWithRetries(options);
   } catch (e) {
     console.error('postMetrics():', e);
   }
@@ -1011,8 +1088,8 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
       do {
         body.variables.authDomainId = authDomain.id;
         options.body = JSON.stringify(body);
-        console.debug('getAuthDomainToGroupsMap() $http.post', authDomain.name);
-        let response = await $http.post(options);
+        console.debug('getAuthDomainToGroupsMap() postWithRetries', authDomain.name);
+        let response = await postWithRetries(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
           console.error(responseBody.errors);
@@ -1074,8 +1151,8 @@ async function getAuthDomainsArray() {
   try {
     let authDomains = [];
     do {
-      console.debug('getAuthDomainsArray() $http.post');
-      let response = await $http.post(options);
+      console.debug('getAuthDomainsArray()postWithRetries');
+      let response = await postWithRetries(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
         console.error(responseBody.errors);
@@ -1239,8 +1316,8 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       options.body = JSON.stringify(body);
       let errorMessage = null;
       do {
-        console.debug('getGroupIdAndRolesObject() $http.post', authDomain, group.displayName, body.variables.rolesCursor);
-        let response = await $http.post(options);
+        console.debug('getGroupIdAndRolesObject() postWithRetries', authDomain, group.displayName, body.variables.rolesCursor);
+        let response = await postWithRetries(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
           errorMessage = responseBody.errors; 
@@ -1338,8 +1415,8 @@ async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
       console.log('getGroupIdToGroupAndUsersMap(): authDomain.id:', authDomain.id);
       let groups = [];
       do {
-        console.debug('getGroupIdToGroupAndUsersMap() $http.post, Auth Domain:' + authDomain.name);
-        let response = await $http.post(options);
+        console.debug('getGroupIdToGroupAndUsersMap() postWithRetries, Auth Domain:' + authDomain.name);
+        let response = await postWithRetries(options);
         console.log('getGroupIdToGroupAndUsersMap(): options:', options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -1434,8 +1511,8 @@ async function getGroupUsersByCursor(authDomainId, group) {
     body.variables.usersCursor = group.users.nextCursor;
     options.body = JSON.stringify(body);
     do {
-      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  //
-      let response = await $http.post(options);
+      console.debug('getGroupUsersByCursor() postWithRetries for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  //
+      let response = await postWithRetries(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
         console.error(responseBody.errors);
@@ -1443,11 +1520,50 @@ async function getGroupUsersByCursor(authDomainId, group) {
       users = users.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.users);
       body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.nextCursor;
       options.body = JSON.stringify(body);
-      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);
+      console.debug('getGroupUsersByCursor() postWithRetries for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);
     } while (body.variables.usersCursor)
     return users;
   } catch (error) {
     console.error('getGroupUsersByCursor():', error)
+  }
+}
+
+
+/**
+ * Wrap $http.post with a configurable number of retries.
+ * @param {*} options the post options.
+ * @returns the response.
+ */
+async function postWithRetries(options) {
+  let success = false;
+  let response;
+  let retries = 0;
+  let currentError;
+  do {
+    try {
+      response = await $http.post(options);
+      let responseBody = JSON.parse(response.body);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error(responseBody.errors);
+        console.error("postWithRetries(): An error occurred:", responseBody.errors);
+        console.error("postWithRetries(): retry count:", retries);
+        currentError = responseBody.errors;
+        retries++;
+      } else {
+        success = true;
+      }
+    } catch (error) {
+      console.error("postWithRetries(): An error occurred:", error);
+      console.error("postWithRetries(): retry count:", retries);
+      currentError = error;
+      retries++;
+    }
+  } while (!success && retries <= MAX_RETRIES);
+  if (success) {
+    return response;
+  } else {
+    console.error("postWithRetries(): max retries exceeded:", MAX_RETRIES);
+    throw currentError;
   }
 }
 
