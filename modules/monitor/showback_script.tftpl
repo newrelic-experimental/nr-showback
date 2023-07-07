@@ -331,8 +331,8 @@ async function getOrgAccounts() {
   };
 
   try {
-    console.debug('getOrgAccounts() $http.post');
-    let response = await $http.post(options);
+    console.debug('getOrgAccounts() postWithRetries');
+    let response = await postWithRetries(options);
     let responseBody = JSON.parse(response.body);
     if (responseBody.hasOwnProperty('errors')) {
       console.error(responseBody.errors);
@@ -518,8 +518,8 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
       console.log('enrichEmailToUserAndGroupsMap(): authDomain.id:', authDomain.id);
       let users = [];
       do {
-        console.debug('enrichEmailToUserAndGroupsMap() $http.post, Auth Domain:' + authDomain.name);
-        let response = await $http.post(options);
+        console.debug('enrichEmailToUserAndGroupsMap() postWithRetries, Auth Domain:' + authDomain.name);
+        let response = await postWithRetries(options);
         console.log('enrichEmailToUserAndGroupsMap(): options:', options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -996,8 +996,8 @@ async function postCustomEvents(body) {
     }
   }
   try {
-    console.debug('postCustomEvents() $http.post');
-    return await $http.post(options);
+    console.debug('postCustomEvents() postWithRetries');
+    return await postWithRetries(options);
   } catch (e) {
     console.error('postCustomEvents():', e);
   }
@@ -1025,8 +1025,8 @@ async function postCustomEvents(body) {
     }
   }
   try {
-    console.debug('postMetrics() $http.post');
-    return await $http.post(options);
+    console.debug('postMetrics() postWithRetries');
+    return await postWithRetries(options);
   } catch (e) {
     console.error('postMetrics():', e);
   }
@@ -1088,8 +1088,8 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
       do {
         body.variables.authDomainId = authDomain.id;
         options.body = JSON.stringify(body);
-        console.debug('getAuthDomainToGroupsMap() $http.post', authDomain.name);
-        let response = await $http.post(options);
+        console.debug('getAuthDomainToGroupsMap() postWithRetries', authDomain.name);
+        let response = await postWithRetries(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
           console.error(responseBody.errors);
@@ -1151,8 +1151,8 @@ async function getAuthDomainsArray() {
   try {
     let authDomains = [];
     do {
-      console.debug('getAuthDomainsArray() $http.post');
-      let response = await $http.post(options);
+      console.debug('getAuthDomainsArray()postWithRetries');
+      let response = await postWithRetries(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
         console.error(responseBody.errors);
@@ -1316,8 +1316,8 @@ async function getGroupIdAndRolesObject(authDomain, group) {
       options.body = JSON.stringify(body);
       let errorMessage = null;
       do {
-        console.debug('getGroupIdAndRolesObject() $http.post', authDomain, group.displayName, body.variables.rolesCursor);
-        let response = await $http.post(options);
+        console.debug('getGroupIdAndRolesObject() postWithRetries', authDomain, group.displayName, body.variables.rolesCursor);
+        let response = await postWithRetries(options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
           errorMessage = responseBody.errors; 
@@ -1415,8 +1415,8 @@ async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
       console.log('getGroupIdToGroupAndUsersMap(): authDomain.id:', authDomain.id);
       let groups = [];
       do {
-        console.debug('getGroupIdToGroupAndUsersMap() $http.post, Auth Domain:' + authDomain.name);
-        let response = await $http.post(options);
+        console.debug('getGroupIdToGroupAndUsersMap() postWithRetries, Auth Domain:' + authDomain.name);
+        let response = await postWithRetries(options);
         console.log('getGroupIdToGroupAndUsersMap(): options:', options);
         let responseBody = JSON.parse(response.body);
         if (responseBody.hasOwnProperty('errors')) {
@@ -1511,8 +1511,8 @@ async function getGroupUsersByCursor(authDomainId, group) {
     body.variables.usersCursor = group.users.nextCursor;
     options.body = JSON.stringify(body);
     do {
-      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  //
-      let response = await $http.post(options);
+      console.debug('getGroupUsersByCursor() postWithRetries for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  //
+      let response = await postWithRetries(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
         console.error(responseBody.errors);
@@ -1520,11 +1520,50 @@ async function getGroupUsersByCursor(authDomainId, group) {
       users = users.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.users);
       body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.nextCursor;
       options.body = JSON.stringify(body);
-      console.debug('getGroupUsersByCursor() $http.post for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);
+      console.debug('getGroupUsersByCursor() postWithRetries for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);
     } while (body.variables.usersCursor)
     return users;
   } catch (error) {
     console.error('getGroupUsersByCursor():', error)
+  }
+}
+
+
+/**
+ * Wrap $http.post with a configurable number of retries.
+ * @param {*} options the post options.
+ * @returns the response.
+ */
+async function postWithRetries(options) {
+  let success = false;
+  let response;
+  let retries = 0;
+  let currentError;
+  do {
+    try {
+      response = await $http.post(options);
+      let responseBody = JSON.parse(response.body);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error(responseBody.errors);
+        console.error("postWithRetries(): An error occurred:", responseBody.errors);
+        console.error("postWithRetries(): retry count:", retries);
+        currentError = responseBody.errors;
+        retries++;
+      } else {
+        success = true;
+      }
+    } catch (error) {
+      console.error("postWithRetries(): An error occurred:", error);
+      console.error("postWithRetries(): retry count:", retries);
+      currentError = error;
+      retries++;
+    }
+  } while (!success && retries <= MAX_RETRIES);
+  if (success) {
+    return response;
+  } else {
+    console.error("postWithRetries(): max retries exceeded:", MAX_RETRIES);
+    throw currentError;
   }
 }
 
