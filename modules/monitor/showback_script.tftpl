@@ -728,12 +728,38 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
         console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email, "and tier:", tier);
       }
     }
-    if (departmentSet.size == 0) {
-      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email);
-      departmentSet.add(DEPARTMENT_UNASSIGNED);
-    }
     if (email) {
       emailToDepartmentSetMap.set(email, departmentSet);
+    }
+
+    // Handle users with no department
+    if (departmentSet.size == 0) {
+      let proportion = 1;
+      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email);
+      let user = consolidatedEmailToUserAndGroupsMap.get(email);
+      if (user) {
+        let userType = user.type;
+        user.departmentSet = new Set([DEPARTMENT_UNASSIGNED]);
+        if (departmentToUserTypeCountsMap.has(DEPARTMENT_UNASSIGNED)) {  // Update the map entry with the proportion for this user
+          let userTypeCountsObject = departmentToUserTypeCountsMap.get(DEPARTMENT_UNASSIGNED);
+          if (userType.displayName === 'Full platform') {
+            userTypeCountsObject.full_platform += proportion;
+          } else if (userType.displayName === 'Core') {
+            userTypeCountsObject.core += proportion;
+          } else if (userType.displayName === 'Basic') {
+            userTypeCountsObject.basic += proportion;
+          } else {
+            console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+          }
+        } else {  // Initialize the user type counts for the department, and create the map entry
+          let userTypeCountsObject = {
+            full_platform: userType.displayName === 'Full platform' ? proportion : 0,
+            core: userType.displayName === 'Core' ? proportion : 0,
+            basic: userType.displayName === 'Basic' ? proportion : 0
+          };
+          departmentToUserTypeCountsMap.set(DEPARTMENT_UNASSIGNED, userTypeCountsObject);
+        }
+      }
     }
 
     // Skip / ignore new relic users for showback reporting by department
@@ -777,7 +803,7 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
               core: userType.displayName === 'Core' ? proportion : 0,
               basic: userType.displayName === 'Basic' ? proportion : 0
             };
-            departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
+            departmentToUserTypeCountsMap.set(department, userTypeCountsObject);
           }
         }
       }
@@ -808,37 +834,58 @@ function postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierM
    * Dimensional metrics
    */
   let metrics = new Array();
-  let totalBasicUserCount = 0, totalCoreUserCount = 0, totalFullUserCount = 0, totalUserCount = 0;
+  let tierToAggregateUserCountObjectMap = new Map();
   // By department metrics
   for (const [department, userTypeCountsObject] of departmentToUserTypeCountsMap) {
     let tier = departmentToTierMap.get(department);
     tier ??= DEFAULT_DEPT_TIER;  // Nullish coalescing assignment, to assign the default tier (1)
+    let aggregateUserCountObject;
+    if (tierToAggregateUserCountObjectMap.has(tier)) {
+      aggregateUserCountObject = tierToAggregateUserCountObjectMap.get(tier);
+    } else {
+      aggregateUserCountObject = {
+        basic: 0,
+        core: 0,
+        full: 0,
+        total: 0
+      }
+    }
     let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department, "tier": tier });
     metrics.push(basicUserDeptMetric);
-    totalBasicUserCount += userTypeCountsObject.basic;
+    aggregateUserCountObject.basic += userTypeCountsObject.basic;
 
     let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department, "tier": tier });
     metrics.push(coreUserDeptMetric);
-    totalCoreUserCount += userTypeCountsObject.core;
+    aggregateUserCountObject.core += userTypeCountsObject.core;
 
     let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department, "tier": tier });
     metrics.push(fullUserDeptMetric);
-    totalFullUserCount += userTypeCountsObject.full_platform;
+    aggregateUserCountObject.full += userTypeCountsObject.full_platform;
 
     let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
     let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department, "tier": tier });
     metrics.push(totalUserDeptMetric);
-    totalUserCount += totalUserDeptCount;
+    aggregateUserCountObject.total += totalUserDeptCount;
+    tierToAggregateUserCountObjectMap.set(tier, aggregateUserCountObject);
   }
   // Aggregates metrics
-  let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", totalBasicUserCount, timestamp, {});
-  metrics.push(totalBasicUserMetric);
-  let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", totalCoreUserCount, timestamp, {});
-  metrics.push(totalCoreUserMetric);
-  let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", totalFullUserCount, timestamp, {});
-  metrics.push(totalFullUserMetric);
-  let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", totalUserCount, timestamp, {});
-  metrics.push(totalUserMetric);
+  for (const [tier, aggregateUserCountObject] of tierToAggregateUserCountObjectMap) {
+    if (tier > 1) {
+      let userTypeCountsObject = departmentToUserTypeCountsMap.get(DEPARTMENT_UNASSIGNED);
+      aggregateUserCountObject.basic += userTypeCountsObject.basic;
+      aggregateUserCountObject.core += userTypeCountsObject.core;
+      aggregateUserCountObject.full += userTypeCountsObject.full_platform;
+      aggregateUserCountObject.total += userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
+    }
+    let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, { "tier": tier });
+    metrics.push(totalBasicUserMetric);
+    let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, { "tier": tier });
+    metrics.push(totalCoreUserMetric);
+    let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", aggregateUserCountObject.full, timestamp, { "tier": tier });
+    metrics.push(totalFullUserMetric);
+    let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, { "tier": tier });
+    metrics.push(totalUserMetric);
+  }
   chunkAndPostMetrics(metrics);
   
   return departmentArray;
