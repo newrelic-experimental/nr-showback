@@ -149,29 +149,43 @@ async function processShowback() {
 
 
 /**
- * Gets the department/cost-center/business-unit to which user on the account with Full platform access or Core should be assigned.
+ * Gets a map of department tier to a map of the count of department/cost-center/business-unit to which user on the account with Full platform access or Core should be assigned.
  * @param {*} account an account to be mapped to a department. 
- * @returns the department to be assigned.
+ * @returns a map of department tier to a map of the count of department/cost-center/business-unit.
  */
- function getDepartment(account) {
-  let accountName = account.name;
-  let department = DEPARTMENT_UNASSIGNED;
-  switch (true) { 
-  %{~ for department in tf_showback_config ~}
-  %{~ for account in department.accounts_in ~}
-    case accountName === "${account}":
-  %{~ endfor ~}
-  %{~ for regex in department.accounts_regex ~}
-    case (new RegExp("${regex}").test(accountName)):
-  %{~ endfor ~}
-      department = "${department.department_name}";
-      break;
-  %{~ endfor ~}
-    default:
-      break;
+function getDepartmentMapping(account) {
+  let departments = ${jsonencode(tf_showback_config)};
+
+  let tierToDeptSetMap = new Map();
+  for (const department of departments) {
+    let deptSet = new Set();
+    for (const accounts_in of department.accounts_in) {
+      if (accounts_in.includes(account.name)) {
+        deptSet.add(department.department_name);
+      }
+    }
+    for (const accounts_regex of department.accounts_regex) {
+      if (new RegExp(accounts_regex).test(account.name)) {
+        deptSet.add(department.department_name);
+      }
+    }
+    if (tierToDeptSetMap.has(department.tier)) {
+      let existingDeptSet = tierToDeptSetMap.get(department.tier);
+      let mergedSet = new Set([...existingDeptSet, ...deptSet])
+      tierToDeptSetMap.set(department.tier, mergedSet);
+    } else {
+      tierToDeptSetMap.set(department.tier, deptSet);
+    }
   }
-  if (department === DEPARTMENT_UNASSIGNED) console.error("getDepartment(): The department of account", accountName, 'is unassigned');
-  return department;
+
+  for (const [tier, deptSetMap] of tierToDeptSetMap) {
+    if (deptSetMap.size == 0) {
+      console.error("getDepartment(): The department of account", account.name, 'is unassigned in tier', tier);
+      tierToDeptSetMap.set(tier, deptSetMap.add(DEPARTMENT_UNASSIGNED));
+    }
+  }
+
+  return tierToDeptSetMap;;
 }
 
 
@@ -695,13 +709,27 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
   let ignoreNewRelicUsers = ${tf_showback_ignore_newrelic_users};
   for (const [email, accountSet] of consolidatedEmailToAccountSetMap) {
     let departmentSet = new Set();
+    let tierToDeptSetMap = new Map();
     for (const account of accountSet) {
       if (account?.isCanceled) continue;
-      let department = getDepartment(account);
-      departmentSet.add(department);
+      let map = getDepartmentMapping(account);
+      for (const [tier, deptSet] of map) {
+        let existingDeptSet = tierToDeptSetMap.get(tier);
+        if (existingDeptSet) {
+          tierToDeptSetMap.set(tier, new Set([...existingDeptSet, ...deptSet]))
+        } else {
+          tierToDeptSetMap.set(tier, deptSet);
+    }
+      }
+    }
+    for (const [tier, deptSet] of tierToDeptSetMap) {
+      departmentSet = new Set([...departmentSet, ...deptSet]);
+      if (deptSet.size == 1 && deptSet.has(DEPARTMENT_UNASSIGNED)) {
+        console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email, "and tier:", tier);
+      }
     }
     if (departmentSet.size == 0) {
-      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user", email);
+      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email);
       departmentSet.add(DEPARTMENT_UNASSIGNED);
     }
     if (email) {
@@ -716,39 +744,41 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
       }
     }
 
-    // Apportion the user to each department they are a member of proportionally,
-    // e.g. if the user is a full_platform user and in two departments,
-    // add 0.5 of a full_platform user to each department.
-    let proportion = 1/departmentSet.size;
-    if (proportion < 1) {
-      // The user is a member of accounts under two or more different departments, so split equally
-      console.log("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments:", departmentSet, "apportioning equally across each department");
-    }
+    for (const [tier, deptSet] of tierToDeptSetMap) {
+      // Apportion the user to each department they are a member of proportionally,
+      // e.g. if the user is a full_platform user and in two departments,
+      // add 0.5 of a full_platform user to each department.
+      let proportion = 1/deptSet.size;
+      if (proportion < 1) {
+        // The user is a member of accounts under two or more different departments, so split equally
+        console.log("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments:", departmentSet, "apportioning equally across each department");
+      }
 
-    // Initialize, or update, an existing department's userCount
-    let user = consolidatedEmailToUserAndGroupsMap.get(email);
-    if (user) {
-      let userType = user.type;
-      user.departmentSet = departmentSet;
-      for (const department of departmentSet) {
-        if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
-          let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
-          if (userType.displayName === 'Full platform') {
-            userTypeCountsObject.full_platform += proportion;
-          } else if (userType.displayName === 'Core') {
-            userTypeCountsObject.core += proportion;
-          } else if (userType.displayName === 'Basic') {
-            userTypeCountsObject.basic += proportion;
-          } else {
-            console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+      // Initialize, or update, an existing department's userCount
+      let user = consolidatedEmailToUserAndGroupsMap.get(email);
+      if (user) {
+        let userType = user.type;
+          user.departmentSet = deptSet;
+          for (const department of deptSet) {
+          if (departmentToUserTypeCountsMap.has(department)) {  // Update the map entry with the proportion for this user
+            let userTypeCountsObject = departmentToUserTypeCountsMap.get(department);
+            if (userType.displayName === 'Full platform') {
+              userTypeCountsObject.full_platform += proportion;
+            } else if (userType.displayName === 'Core') {
+              userTypeCountsObject.core += proportion;
+            } else if (userType.displayName === 'Basic') {
+              userTypeCountsObject.basic += proportion;
+            } else {
+              console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
+            }
+          } else {  // Initialize the user type counts for the department, and create the map entry
+            let userTypeCountsObject = {
+              full_platform: userType.displayName === 'Full platform' ? proportion : 0,
+              core: userType.displayName === 'Core' ? proportion : 0,
+              basic: userType.displayName === 'Basic' ? proportion : 0
+            };
+            departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
           }
-        } else {  // Initialize the user type counts for the department, and create the map entry
-          let userTypeCountsObject = {
-            full_platform: userType.displayName === 'Full platform' ? proportion : 0,
-            core: userType.displayName === 'Core' ? proportion : 0,
-            basic: userType.displayName === 'Basic' ? proportion : 0
-          };
-          departmentToUserTypeCountsMap.set(department, userTypeCountsObject)
         }
       }
     }
