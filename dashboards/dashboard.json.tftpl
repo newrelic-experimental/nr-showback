@@ -86,7 +86,7 @@
             "nrqlQueries": [
               {
                 "accountId":  ${tf_account_id},
-                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -116,7 +116,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -146,7 +146,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -176,7 +176,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = 1 OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -451,6 +451,29 @@
           }
         }
       ]
+    }
+  ],
+  "variables": [
+    {
+      "name": "tier_var",
+      "items": null,
+      "defaultValues": [
+        {
+          "value": {
+            "string": "1"
+          }
+        }
+      ],
+      "nrqlQuery": {
+        "accountIds": [
+          2010237
+        ],
+        "query": "SELECT uniques(tier) FROM Metric WHERE metricName = 'showback.department.fulluser.count' SINCE 24 hours ago"
+      },
+      "title": "Tier",
+      "type": "NRQL",
+      "isMultiSelection": false,
+      "replacementStrategy": "NUMBER"
     }
   ]
 }
