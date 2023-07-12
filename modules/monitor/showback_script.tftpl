@@ -120,8 +120,11 @@ async function processShowback() {
   // Get department to tier map
   let departmentToTierMap = getDepartmentToTierMap();
 
+  // Get the number of tiers
+  let numTiers = getNumTiers(departmentToTierMap);
+
   // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
-  let { departmentToUserTypeCountsMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, accountIdToAccountMap);
+  let { tierToDepartmentToUserTypeCountsMapMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, numTiers, accountIdToAccountMap);
 
   // Build a map of accounts, by id, to their users
   let accountIdToUsersMap = buildAccountToUsersMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap);
@@ -130,7 +133,7 @@ async function processShowback() {
   const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
 
   // Create showback.department and aggregated showback.organization metrics in NRDB
-  postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierMap, currentTimestamp);
+  postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, currentTimestamp);
 
   // Create Showback_AccountUsers in NRDB
   let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
@@ -180,7 +183,7 @@ function getDepartmentMapping(account) {
 
   for (const [tier, deptSetMap] of tierToDeptSetMap) {
     if (deptSetMap.size == 0) {
-      console.error("getDepartment(): The department of account", account.name, 'is unassigned in tier', tier);
+      console.error("getDepartmentMapping(): The department of account", account.name, 'is unassigned in tier', tier);
       tierToDeptSetMap.set(tier, deptSetMap.add(DEPARTMENT_UNASSIGNED));
     }
   }
@@ -196,9 +199,23 @@ function getDepartmentMapping(account) {
 function getDepartmentToTierMap() {
   return new Map([
     %{~ for index_department, department in tf_showback_config ~}
-    [ "${department.department_name}", ${department.tier} ]%{~ if index_department <= length(department) },%{~ endif }
+    [ "${department.department_name}", ${department.tier} ]%{~ if (index_department + 1) < length(tf_showback_config) },%{~ endif }
     %{~ endfor ~}
   ]);
+}
+
+
+/**
+ * Gets the number of tiers.
+ * @param {*} deptToTierMap 
+ * @returns the number of tiers.
+ */
+function getNumTiers(deptToTierMap) {
+  let tierSet = new Set();
+  for (const [dept, tier] of deptToTierMap) {
+    tierSet.add(tier);
+  }
+  return tierSet.size;
 }
 
 
@@ -700,15 +717,18 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
  * Build a map of departments to their user type counts.
  * @param {*} consolidatedEmailToAccountSetMap a (case insensitive) map of users (by email) to their accounts.
  * @param {*} consolidatedEmailToUserAndGroupsMap a (case insensitive) map of users (by email) to their user details and groups.
+ * @param {*} numTiers the number of tiers.
  * @param {*} accountIdToAccountMap a map of account ids to accounts.
- * @returns a map of departments to their user type counts, and a map of user to departments.
+ * @returns a map of tiers to a map of departments to their user type counts, and a map of user to consolidated departments.
  */
-function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, accountIdToAccountMap) {
-  let departmentToUserTypeCountsMap = new Map();
+function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, numTiers, accountIdToAccountMap) {
+  let tierToDepartmentToUserTypeCountsMapMap = new Map();
   let emailToDepartmentSetMap = new Map();
   let ignoreNewRelicUsers = ${tf_showback_ignore_newrelic_users};
   for (const [email, accountSet] of consolidatedEmailToAccountSetMap) {
     let departmentSet = new Set();
+
+    // Build a map of tier to department set for each user
     let tierToDeptSetMap = new Map();
     for (const account of accountSet) {
       if (account?.isCanceled) continue;
@@ -719,47 +739,29 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
           tierToDeptSetMap.set(tier, new Set([...existingDeptSet, ...deptSet]))
         } else {
           tierToDeptSetMap.set(tier, deptSet);
-    }
+        }
       }
     }
+
+    // Handle users with no accounts
+    if (accountSet.size == 0) {
+      console.error("buildDepartmentToUserTypeCountsMap: User has no accounts:", email);
+      for (let tier = 1; tier <= numTiers; tier++) {
+        tierToDeptSetMap.set(tier, new Set([DEPARTMENT_UNASSIGNED]));
+      }
+    }
+
+    // Log an error when a user has no department assigned
     for (const [tier, deptSet] of tierToDeptSetMap) {
-      departmentSet = new Set([...departmentSet, ...deptSet]);
+      departmentSet = new Set([...departmentSet, ...deptSet]);  // Combine departments
       if (deptSet.size == 1 && deptSet.has(DEPARTMENT_UNASSIGNED)) {
         console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email, "and tier:", tier);
       }
     }
+
+    // Populate emailToDepartmentSetMap
     if (email) {
       emailToDepartmentSetMap.set(email, departmentSet);
-    }
-
-    // Handle users with no department
-    if (departmentSet.size == 0) {
-      let proportion = 1;
-      console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email);
-      let user = consolidatedEmailToUserAndGroupsMap.get(email);
-      if (user) {
-        let userType = user.type;
-        user.departmentSet = new Set([DEPARTMENT_UNASSIGNED]);
-        if (departmentToUserTypeCountsMap.has(DEPARTMENT_UNASSIGNED)) {  // Update the map entry with the proportion for this user
-          let userTypeCountsObject = departmentToUserTypeCountsMap.get(DEPARTMENT_UNASSIGNED);
-          if (userType.displayName === 'Full platform') {
-            userTypeCountsObject.full_platform += proportion;
-          } else if (userType.displayName === 'Core') {
-            userTypeCountsObject.core += proportion;
-          } else if (userType.displayName === 'Basic') {
-            userTypeCountsObject.basic += proportion;
-          } else {
-            console.error('buildDepartmentToUserTypeCountsMap(): Unknown user type:', userType)
-          }
-        } else {  // Initialize the user type counts for the department, and create the map entry
-          let userTypeCountsObject = {
-            full_platform: userType.displayName === 'Full platform' ? proportion : 0,
-            core: userType.displayName === 'Core' ? proportion : 0,
-            basic: userType.displayName === 'Basic' ? proportion : 0
-          };
-          departmentToUserTypeCountsMap.set(DEPARTMENT_UNASSIGNED, userTypeCountsObject);
-        }
-      }
     }
 
     // Skip / ignore new relic users for showback reporting by department
@@ -771,6 +773,12 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
     }
 
     for (const [tier, deptSet] of tierToDeptSetMap) {
+      let departmentToUserTypeCountsMap;
+      if (tierToDepartmentToUserTypeCountsMapMap.has(tier)) {  // Retrieve existing map
+        departmentToUserTypeCountsMap = tierToDepartmentToUserTypeCountsMapMap.get(tier);
+      } else {  // Create new map
+        departmentToUserTypeCountsMap = new Map();
+      }
       // Apportion the user to each department they are a member of proportionally,
       // e.g. if the user is a full_platform user and in two departments,
       // add 0.5 of a full_platform user to each department.
@@ -807,76 +815,65 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
           }
         }
       }
+      tierToDepartmentToUserTypeCountsMapMap.set(tier, departmentToUserTypeCountsMap);
     }
   }
 
-  return { departmentToUserTypeCountsMap, emailToDepartmentSetMap };
+  return { tierToDepartmentToUserTypeCountsMapMap, emailToDepartmentSetMap };
 }
 
 
 /**
  * Post a set of departments to NRDB.
- * @param {*} departmentToUserTypeCountsMap a map of departments to their user type counts.
+ * @param {*} tierToDepartmentToUserTypeCountsMapMap a map of tiers to a map of departments to their user type counts.
  * @param {*} departmentToTierMap a map of departments to their tier.
  * @param {*} timestamp the metric timestamp.
- * @returns an array of departments and their counts of full platform, core and basic users.
  */
-function postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierMap, timestamp) {
-  let departmentArray = Array.from(departmentToUserTypeCountsMap, ([department, userTypesCountObject]) => ({
-    [DEPARTMENT_ATTRIBUTE_NAME]: department,
-    [FULL_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.full_platform,
-    [CORE_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.core,
-    [BASIC_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.basic,
-    [TOTAL_USER_COUNT_ATTRIBUTE_NAME]: userTypesCountObject.basic + userTypesCountObject.core + userTypesCountObject.full_platform
-  }));
-
+function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, timestamp) {
   /*
    * Dimensional metrics
    */
   let metrics = new Array();
   let tierToAggregateUserCountObjectMap = new Map();
-  // By department metrics
-  for (const [department, userTypeCountsObject] of departmentToUserTypeCountsMap) {
-    let tier = departmentToTierMap.get(department);
-    tier ??= DEFAULT_DEPT_TIER;  // Nullish coalescing assignment, to assign the default tier (1)
-    let aggregateUserCountObject;
-    if (tierToAggregateUserCountObjectMap.has(tier)) {
-      aggregateUserCountObject = tierToAggregateUserCountObjectMap.get(tier);
-    } else {
-      aggregateUserCountObject = {
-        basic: 0,
-        core: 0,
-        full: 0,
-        total: 0
+  // By tier
+  for (const [tier, departmentToUserTypeCountsMap] of tierToDepartmentToUserTypeCountsMapMap) {
+    // By department metrics
+    for (const [department, userTypeCountsObject] of departmentToUserTypeCountsMap) {
+      // Aggregate for later
+      let aggregateUserCountObject;
+      if (tierToAggregateUserCountObjectMap.has(tier)) {
+        aggregateUserCountObject = tierToAggregateUserCountObjectMap.get(tier);
+      } else {
+        aggregateUserCountObject = {
+          basic: 0,
+          core: 0,
+          full: 0,
+          total: 0
+        }
       }
+      // Build department metrics
+      let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department, "tier": tier });
+      metrics.push(basicUserDeptMetric);
+      aggregateUserCountObject.basic += userTypeCountsObject.basic;
+
+      let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department, "tier": tier });
+      metrics.push(coreUserDeptMetric);
+      aggregateUserCountObject.core += userTypeCountsObject.core;
+
+      let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department, "tier": tier });
+      metrics.push(fullUserDeptMetric);
+      aggregateUserCountObject.full += userTypeCountsObject.full_platform;
+
+      let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
+      let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department, "tier": tier });
+      metrics.push(totalUserDeptMetric);
+      aggregateUserCountObject.total += totalUserDeptCount;
+      tierToAggregateUserCountObjectMap.set(tier, aggregateUserCountObject);
     }
-    let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department, "tier": tier });
-    metrics.push(basicUserDeptMetric);
-    aggregateUserCountObject.basic += userTypeCountsObject.basic;
-
-    let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department, "tier": tier });
-    metrics.push(coreUserDeptMetric);
-    aggregateUserCountObject.core += userTypeCountsObject.core;
-
-    let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department, "tier": tier });
-    metrics.push(fullUserDeptMetric);
-    aggregateUserCountObject.full += userTypeCountsObject.full_platform;
-
-    let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
-    let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department, "tier": tier });
-    metrics.push(totalUserDeptMetric);
-    aggregateUserCountObject.total += totalUserDeptCount;
-    tierToAggregateUserCountObjectMap.set(tier, aggregateUserCountObject);
   }
+
   // Aggregates metrics
   for (const [tier, aggregateUserCountObject] of tierToAggregateUserCountObjectMap) {
-    if (tier > 1) {
-      let userTypeCountsObject = departmentToUserTypeCountsMap.get(DEPARTMENT_UNASSIGNED);
-      aggregateUserCountObject.basic += userTypeCountsObject.basic;
-      aggregateUserCountObject.core += userTypeCountsObject.core;
-      aggregateUserCountObject.full += userTypeCountsObject.full_platform;
-      aggregateUserCountObject.total += userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
-    }
     let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, { "tier": tier });
     metrics.push(totalBasicUserMetric);
     let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, { "tier": tier });
@@ -886,9 +883,8 @@ function postDepartmentShowback(departmentToUserTypeCountsMap, departmentToTierM
     let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, { "tier": tier });
     metrics.push(totalUserMetric);
   }
+
   chunkAndPostMetrics(metrics);
-  
-  return departmentArray;
 }
 
 
