@@ -50,8 +50,6 @@ const CHUNK_SIZE = 100;
 const GQL_API_CHUNK_SIZE = 25;
 const MAX_RETRIES = 3;
 
-const DEFAULT_DEPT_TIER = 1;
-
 
 /**
  * Process showback (https://en.wikipedia.org/wiki/IT_chargeback_and_showback) for an organization, as associated with the supplied user api key. 
@@ -120,11 +118,11 @@ async function processShowback() {
   // Get department to tier map
   let departmentToTierMap = getDepartmentToTierMap();
 
-  // Get the number of tiers
-  let numTiers = getNumTiers(departmentToTierMap);
+  // Get the tier set
+  let tierSet = getTierSet(departmentToTierMap);
 
   // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
-  let { tierToDepartmentToUserTypeCountsMapMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, numTiers, accountIdToAccountMap);
+  let { tierToDepartmentToUserTypeCountsMapMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, tierSet, accountIdToAccountMap);
 
   // Build a map of accounts, by id, to their users
   let accountIdToUsersMap = buildAccountToUsersMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap);
@@ -197,25 +195,21 @@ function getDepartmentMapping(account) {
  * @returns the department to tier map.
  */
 function getDepartmentToTierMap() {
-  return new Map([
-    %{~ for index_department, department in tf_showback_config ~}
-    [ "${department.department_name}", ${department.tier} ]%{~ if (index_department + 1) < length(tf_showback_config) },%{~ endif }
-    %{~ endfor ~}
-  ]);
+  return new Map(${tf_dept_to_tier_map});
 }
 
 
 /**
- * Gets the number of tiers.
+ * Gets the tier set.
  * @param {*} deptToTierMap 
- * @returns the number of tiers.
+ * @returns the tier set.
  */
-function getNumTiers(deptToTierMap) {
+function getTierSet(deptToTierMap) {
   let tierSet = new Set();
   for (const [dept, tier] of deptToTierMap) {
     tierSet.add(tier);
   }
-  return tierSet.size;
+  return tierSet;
 }
 
 
@@ -717,11 +711,11 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
  * Build a map of departments to their user type counts.
  * @param {*} consolidatedEmailToAccountSetMap a (case insensitive) map of users (by email) to their accounts.
  * @param {*} consolidatedEmailToUserAndGroupsMap a (case insensitive) map of users (by email) to their user details and groups.
- * @param {*} numTiers the number of tiers.
+ * @param {*} tierSet the set of tiers.
  * @param {*} accountIdToAccountMap a map of account ids to accounts.
  * @returns a map of tiers to a map of departments to their user type counts, and a map of user to consolidated departments.
  */
-function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, numTiers, accountIdToAccountMap) {
+function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, tierSet, accountIdToAccountMap) {
   let tierToDepartmentToUserTypeCountsMapMap = new Map();
   let emailToDepartmentSetMap = new Map();
   let ignoreNewRelicUsers = ${tf_showback_ignore_newrelic_users};
@@ -746,7 +740,7 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
     // Handle users with no accounts
     if (accountSet.size == 0) {
       console.error("buildDepartmentToUserTypeCountsMap: User has no accounts:", email);
-      for (let tier = 1; tier <= numTiers; tier++) {
+      for (const tier of tierSet) {
         tierToDeptSetMap.set(tier, new Set([DEPARTMENT_UNASSIGNED]));
       }
     }
@@ -852,20 +846,24 @@ function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departme
         }
       }
       // Build department metrics
-      let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, { "department": department, "tier": tier });
+      let attributes = { "department": department };
+      if (tier) {
+        attributes.tier = tier;
+      }
+      let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, attributes);
       metrics.push(basicUserDeptMetric);
       aggregateUserCountObject.basic += userTypeCountsObject.basic;
 
-      let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, { "department": department, "tier": tier });
+      let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, attributes);
       metrics.push(coreUserDeptMetric);
       aggregateUserCountObject.core += userTypeCountsObject.core;
 
-      let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, { "department": department, "tier": tier });
+      let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, attributes);
       metrics.push(fullUserDeptMetric);
       aggregateUserCountObject.full += userTypeCountsObject.full_platform;
 
       let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
-      let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, { "department": department, "tier": tier });
+      let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, attributes);
       metrics.push(totalUserDeptMetric);
       aggregateUserCountObject.total += totalUserDeptCount;
       tierToAggregateUserCountObjectMap.set(tier, aggregateUserCountObject);
@@ -874,13 +872,14 @@ function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departme
 
   // Aggregates metrics
   for (const [tier, aggregateUserCountObject] of tierToAggregateUserCountObjectMap) {
-    let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, { "tier": tier });
+    let attributes = tier ? { "tier": tier } : null;
+    let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, attributes);
     metrics.push(totalBasicUserMetric);
-    let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, { "tier": tier });
+    let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, attributes);
     metrics.push(totalCoreUserMetric);
-    let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", aggregateUserCountObject.full, timestamp, { "tier": tier });
+    let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", aggregateUserCountObject.full, timestamp, attributes);
     metrics.push(totalFullUserMetric);
-    let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, { "tier": tier });
+    let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, attributes);
     metrics.push(totalUserMetric);
   }
 
@@ -898,13 +897,16 @@ function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departme
  * @returns a dimensional metric object.
  */
 function getDimensionalMetricObject(name, type, value, timestamp, attributes) {
-  return {
+  let dimensionalMetricObject = {
     "name": name,
     "type": type,
     "value": value,
-    "timestamp": timestamp,
-    "attributes": attributes
+    "timestamp": timestamp
   };
+  if (attributes) {
+    dimensionalMetricObject.attributes = attributes;
+  }
+  return dimensionalMetricObject;
 }
 
 
@@ -917,21 +919,25 @@ function getDimensionalMetricObject(name, type, value, timestamp, attributes) {
  */
 function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
   let accountArray = [];
-  for (const [accountId, users] of accountToUsersMap) {
+  for (const [accountId, account] of accountIdToAccountMap) {
     let basicUserCount = 0, coreUserCount = 0, fullUserCount = 0;
-    for (const user of users) {
-      let userType = user.type;
-      if (userType.displayName === 'Full platform') {
-        fullUserCount++;
-      } else if (userType.displayName === 'Core') {
-        coreUserCount++;
-      } else if (userType.displayName === 'Basic') {
-        basicUserCount++;
-      } else {
-        console.error('postAccounts(): Unknown user type:', userType)
+    let users = accountToUsersMap.get(accountId);
+    if(users) {
+      for (const user of users) {
+        let userType = user.type;
+        if (userType.displayName === 'Full platform') {
+          fullUserCount++;
+        } else if (userType.displayName === 'Core') {
+          coreUserCount++;
+        } else if (userType.displayName === 'Basic') {
+          basicUserCount++;
+        } else {
+          console.error('postAccounts(): Unknown user type:', userType)
+        }
       }
+    } else if (account && !account.isCanceled) {
+      console.warn('postAccounts(): Account ' + account?.name + ' with id ' + accountId + ' has no users');
     }
-    let account = accountIdToAccountMap.get(accountId);
     if (account && !account.isCanceled) {
       accountArray.push(
         {

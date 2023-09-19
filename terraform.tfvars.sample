@@ -14,7 +14,7 @@ showback_ignore = {
 showback_config = [
   {
     department_name = "Dept 1"  # Both named accounts, and pattern matches
-    tier = 1  // Optional hierarchy of departments, defaults to 1
+    #tier = 'Reporting Unit'  // Optional hierarchy of departments, defaults to null
     accounts_in = [
       "An account that does not match a pattern for this department",
       "Another account not matching a pattern"
@@ -26,7 +26,7 @@ showback_config = [
   },
   {
     department_name = "Dept 2"  # No named accounts, only patterns
-    tier = 2  // Optional hierarchy of departments, defaults to 1
+    #tier = 'Reporting Unit'  // Optional hierarchy of departments, defaults to null
     accounts_in = []
     accounts_regex = [
       "^two..*"
@@ -34,7 +34,7 @@ showback_config = [
   },
   {
     department_name = "Dept 3"  # Only named accounts
-    tier = 1  // Optional hierarchy of departments, defaults to 1
+    #tier = 'Reporting Unit'  // Optional hierarchy of departments, defaults to null
     accounts_in = [
       "Third dept account",
       "Another account from department three"

@@ -3,6 +3,232 @@
   "description": null,
   "permissions": "PUBLIC_READ_WRITE",
   "pages": [
+    %{~ for index, tier in tf_unique_tiers ~}
+    %{~ if tier != null ~}
+    {
+      "name": "${tier}",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Consumption Cost (this month)",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 4,
+            "height": 4
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM Metric, NrConsumption SELECT (max(`showback.department.coreuser.count`) * ${tf_core_user_usd}) + (max(`showback.department.fulluser.count`) * ${tf_full_user_usd}) + (sum(GigabytesIngested) * ${tf_gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(WHERE (department = 'Unassigned' AND (tier = '${tier}')) AS 'Unassigned', %{ for index_department, department in tf_showback_config ~}%{ if index_department != 0 ~}, %{ endif }WHERE (department = '${department.department_name}' AND (tier = '${tier}')) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}'%{ endfor ~}) AS 'department'"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Consumption Cost (this month)",
+          "layout": {
+            "column": 5,
+            "row": 1,
+            "width": 8,
+            "height": 4
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM Metric, NrConsumption SELECT max(`showback.department.coreuser.count`) * ${tf_core_user_usd} + max(`showback.department.fulluser.count`) * ${tf_full_user_usd} + sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Total Cost (USD)', max(`showback.department.fulluser.count`) AS 'Full User Count', max(`showback.department.fulluser.count`) * ${tf_full_user_usd} as 'Full User Cost (USD)', max(`showback.department.coreuser.count`) AS 'Core User Count', max(`showback.department.coreuser.count`) * ${tf_core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(WHERE (department = 'Unassigned' AND (tier = '${tier}')) AS 'Unassigned', %{ for index_department, department in tf_showback_config ~}%{ if index_department != 0 ~}, %{ endif }WHERE (department = '${department.department_name}' AND (tier = '${tier}')) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}'%{ endfor ~}) AS 'department'"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Full Users",
+          "layout": {
+            "column": 1,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId":  ${tf_account_id},
+                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Core Users",
+          "layout": {
+            "column": 4,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Basic Users",
+          "layout": {
+            "column": 7,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Total Users",
+          "layout": {
+            "column": 10,
+            "row": 5,
+            "width": 3,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Total Consumption by Month",
+          "layout": {
+            "column": 1,
+            "row": 8,
+            "width": 12,
+            "height": 4
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "dataFormatters": [
+              {
+                "name": "Ingest Cost",
+                "precision": 2,
+                "type": "decimal"
+              },
+              {
+                "name": "Total Cost",
+                "precision": 2,
+                "type": "decimal"
+              }
+            ],
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM NrMTDConsumption\nSELECT\n  filter(latest(billableConsumption), WHERE metric = 'FullUsers' OR metric = 'FullPlatformUsers') * ${tf_full_user_usd} + filter(latest(billableConsumption) OR 0, WHERE metric = 'CoreUsers') * ${tf_core_user_usd} + filter(latest(GigabytesIngestedBillable) * ${tf_gb_ingest_usd}, WHERE productLine = 'DataPlatform') AS 'Total Cost (USD)',\n  filter(latest(billableConsumption), WHERE metric = 'FullUsers' OR metric = 'FullPlatformUsers') AS 'FSO User Count',\n  filter(latest(billableConsumption), WHERE metric = 'FullUsers' OR metric = 'FullPlatformUsers') * ${tf_full_user_usd} as 'FSO User Cost (USD)',\n  filter(latest(billableConsumption) OR 0, WHERE metric = 'CoreUsers') AS 'Core User Count',\n  filter(latest(billableConsumption) OR 0, WHERE metric = 'CoreUsers') * ${tf_core_user_usd} AS 'Core User Cost (USD)',\n filter(latest(GigabytesIngestedBillable), WHERE productLine = 'DataPlatform') AS 'Ingested GB',\n  filter(latest(GigabytesIngestedBillable) * ${tf_gb_ingest_usd}, WHERE productLine = 'DataPlatform') AS 'Ingest Cost (USD)'\nSINCE 12 months ago facet monthOf(timestamp) order by timestamp"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        }
+      ]
+    },
+    %{ endif ~}
+    %{ endfor ~}
     {
       "name": "Department Showback",
       "description": null,
@@ -29,7 +255,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "${tf_total_consumption_cost_by_department_this_month}"
+                "query": "FROM Metric, NrConsumption SELECT (max(`showback.department.coreuser.count`) * ${tf_core_user_usd}) + (max(`showback.department.fulluser.count`) * ${tf_full_user_usd}) + (sum(GigabytesIngested) * ${tf_gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(WHERE (department = 'Unassigned' AND (tier IS NULL)) AS 'Unassigned', %{ for index_department, department in tf_showback_config ~}%{ if index_department != 0 ~}, %{ endif }WHERE (department = '${department.department_name}' AND (tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}'%{ endfor ~}) AS 'department'"
               }
             ],
             "platformOptions": {
@@ -56,7 +282,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "${tf_consumption_cost_by_department_this_month}"
+                "query": "FROM Metric, NrConsumption SELECT max(`showback.department.coreuser.count`) * ${tf_core_user_usd} + max(`showback.department.fulluser.count`) * ${tf_full_user_usd} + sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Total Cost (USD)', max(`showback.department.fulluser.count`) AS 'Full User Count', max(`showback.department.fulluser.count`) * ${tf_full_user_usd} as 'Full User Cost (USD)', max(`showback.department.coreuser.count`) AS 'Core User Count', max(`showback.department.coreuser.count`) * ${tf_core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(WHERE (department = 'Unassigned' AND (tier IS NULL)) AS 'Unassigned', %{ for index_department, department in tf_showback_config ~}%{ if index_department != 0 ~}, %{ endif }WHERE (department = '${department.department_name}' AND (tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}'%{ endfor ~}) AS 'department'"
               }
             ],
             "platformOptions": {
@@ -86,7 +312,7 @@
             "nrqlQueries": [
               {
                 "accountId":  ${tf_account_id},
-                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -116,7 +342,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -146,7 +372,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -176,7 +402,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = {{tier_var}} OR tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -453,27 +679,5 @@
       ]
     }
   ],
-  "variables": [
-    {
-      "name": "tier_var",
-      "items": null,
-      "defaultValues": [
-        {
-          "value": {
-            "string": "1"
-          }
-        }
-      ],
-      "nrqlQuery": {
-        "accountIds": [
-          2010237
-        ],
-        "query": "SELECT uniques(tier) FROM Metric WHERE metricName = 'showback.department.fulluser.count' SINCE 24 hours ago"
-      },
-      "title": "Tier",
-      "type": "NRQL",
-      "isMultiSelection": false,
-      "replacementStrategy": "NUMBER"
-    }
-  ]
+  "variables": []
 }

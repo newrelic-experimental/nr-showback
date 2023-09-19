@@ -1,4 +1,8 @@
 locals {
+  dept_to_tier_map = jsonencode([
+    for department in var.showback_config : [ department.department_name, department.tier ]
+  ])
+
   templatefile_render = templatefile(
    "${path.module}/showback_script.tftpl",
     {
@@ -7,6 +11,7 @@ locals {
       tf_showback_ignore_groups = var.showback_ignore.groups
       tf_showback_ignore_newrelic_users = var.showback_ignore.newrelic_users
       tf_showback_config = var.showback_config
+      tf_dept_to_tier_map = local.dept_to_tier_map
     }
   )
 }
@@ -45,4 +50,8 @@ output "showback_ignore_newrelic_users" {
 
 output "showback_ignore_groups" {
   value = var.showback_ignore.groups
+}
+
+output "dept_to_tier_map" {
+  value = local.dept_to_tier_map
 }
