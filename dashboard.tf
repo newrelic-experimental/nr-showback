@@ -1,19 +1,19 @@
 # Use a templatefile. For dashboards with many replacement values this is cleaner than using replace().
 locals {
-  total_consumption_cost_by_department_this_month = "FROM Metric, NrConsumption SELECT (max(`showback.department.coreuser.count`) * ${var.showback_price.core_user_usd}) + (max(`showback.department.fulluser.count`) * ${var.showback_price.full_user_usd}) + (sum(GigabytesIngested) * ${var.showback_price.gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(WHERE (department = 'Unassigned' AND (tier = {{tier_var}} OR tier IS NULL)) AS 'Unassigned', %{ for index_department, department in var.showback_config ~}%{ if index_department != 0 ~}, %{ endif }WHERE (department = '${department.department_name}' AND (tier = {{tier_var}} OR tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}'%{ endfor ~}) AS 'department'"
-
-  consumption_cost_by_department_this_month = "FROM Metric, NrConsumption SELECT max(`showback.department.coreuser.count`) * ${var.showback_price.core_user_usd} + max(`showback.department.fulluser.count`) * ${var.showback_price.full_user_usd} + sum(GigabytesIngested) * ${var.showback_price.gb_ingest_usd} AS 'Total Cost (USD)', max(`showback.department.fulluser.count`) AS 'Full User Count', max(`showback.department.fulluser.count`) * ${var.showback_price.full_user_usd} as 'Full User Cost (USD)', max(`showback.department.coreuser.count`) AS 'Core User Count', max(`showback.department.coreuser.count`) * ${var.showback_price.core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${var.showback_price.gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(WHERE (department = 'Unassigned' AND (tier = {{tier_var}} OR tier IS NULL)) AS 'Unassigned', %{ for index_department, department in var.showback_config ~}%{ if index_department != 0 ~}, %{ endif }WHERE (department = '${department.department_name}' AND (tier = {{tier_var}} OR tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}'%{ endfor ~}) AS 'department'"
+  unique_tiers = distinct([
+    for department in var.showback_config : department.tier
+  ])
 
   templatefile_render = templatefile(
    "${path.module}/dashboards/dashboard.json.tftpl",
     {
-     tf_dashboard_name = var.dashboard_name
-     tf_account_id = var.showback_insert_account_id
-     tf_total_consumption_cost_by_department_this_month = local.total_consumption_cost_by_department_this_month
-     tf_consumption_cost_by_department_this_month = local.consumption_cost_by_department_this_month
-     tf_core_user_usd = var.showback_price.core_user_usd
-     tf_full_user_usd = var.showback_price.full_user_usd
-     tf_gb_ingest_usd = var.showback_price.gb_ingest_usd
+      tf_showback_config = var.showback_config
+      tf_dashboard_name = var.dashboard_name
+      tf_account_id = var.showback_insert_account_id
+      tf_core_user_usd = var.showback_price.core_user_usd
+      tf_full_user_usd = var.showback_price.full_user_usd
+      tf_gb_ingest_usd = var.showback_price.gb_ingest_usd
+      tf_unique_tiers = local.unique_tiers
     }
   )
 }
@@ -35,10 +35,8 @@ output "templatefile_dashboard" {
   value=newrelic_one_dashboard_json.templatefile_dashboard.permalink 
 }
 
-output "total_consumption_cost_by_department_this_month" {
-  value = local.total_consumption_cost_by_department_this_month
-}
-
-output "consumption_cost_by_department_this_month" {
-  value = local.consumption_cost_by_department_this_month
+output "unique_tiers" {
+  value = distinct([
+    for department in var.showback_config : department.tier
+  ])
 }
