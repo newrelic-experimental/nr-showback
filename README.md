@@ -30,7 +30,7 @@ Specific groups can be ignored if, say, all users are members of a group with re
 ## Installation
 Make sure terraform is installed. We recommend [tfenv](https://github.com/tfutils/tfenv) for managing your terraform binaries.
 
-Update the [runtf.sh.sample](runtf.sh.sample) wrapper file with your credentials and account details and rename it `runtf.sh`. **Important do not commit this new file to git!** (It should be ignored in `.gitignore` already.)
+Update the [runtf.sh.sample](runtf.sh.sample) wrapper file with your credentials and account details and rename it `runtf.sh`.Alternatively, if you are running from Windows: update the [runtf.bat.sample](runtf.bat.sample) wrapper file with your credentials and account details and rename it `runtf.bat`.  **Important do not commit this new file to git!** (It should be ignored in `.gitignore` already.) 
 
 The wrapper file contains configuration of three API keys:
 1.  `NEW_RELIC_API_KEY`: a User API key to create terraform resources
@@ -41,7 +41,7 @@ The user associated with the `TF_VAR_showback_query_user_api_key` variable must 
 
 The account IDs used for the terraform resources, billing account, and reporting account may be different, but are all likely to be the billing account.
 
-Note: You may want to update the version numbers in [provider.tf](provider.tf) and [modules/monitor/provider.tf](modules/monitor/provider.tf) to the latest versions of Terraform and the New Relic provider.
+Note: You may want to update the version numbers in [provider.tf](provider.tf) and [modules/monitor/provider.tf](modules/monitor/provider.tf) to the latest versions of Terraform and the New Relic provider. You will need to update the provider.tf files if you are using the EU region.
 
 
 ## Showback configuration

@@ -1,5 +1,7 @@
 runtf.sh
 runtf-*.sh
+runtf.bat
+runtf-*.bat
 .DS_Store
 .terraform*
 terraform*
