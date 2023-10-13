@@ -4,6 +4,12 @@ locals {
     for department in var.showback_config : department.tier
   ])
 
+  unique_accounts = distinct(flatten([
+    for department in var.showback_config : [
+      for account in department.accounts_in : account
+    ]
+  ]))
+
   templatefile_render = templatefile(
    "${path.module}/dashboards/dashboard.json.tftpl",
     {
@@ -14,6 +20,7 @@ locals {
       tf_full_user_usd = var.showback_price.full_user_usd
       tf_gb_ingest_usd = var.showback_price.gb_ingest_usd
       tf_unique_tiers = local.unique_tiers
+      tf_unique_accounts = local.unique_accounts
     }
   )
 }
@@ -39,4 +46,12 @@ output "unique_tiers" {
   value = distinct([
     for department in var.showback_config : department.tier
   ])
+}
+
+output "unique_accounts" {
+  value = distinct(flatten([
+    for department in var.showback_config : [
+      for account in department.accounts_in : account
+    ]
+  ]))
 }
