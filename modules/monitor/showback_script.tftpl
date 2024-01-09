@@ -36,8 +36,8 @@ if (IS_LOCAL_ENV) {
 }
 
 // Event constants
-const ACCOUNT_USERS_DATA_TYPE_NAME = "Showback_AccountUsers";
-const UNIQUE_USERS_DATA_TYPE_NAME = "Showback_UniqueUsers";
+const ACCOUNT_USERS_DATA_TYPE_NAME = "${tf_event_name_prefix}_AccountUsers";
+const UNIQUE_USERS_DATA_TYPE_NAME = "${tf_event_name_prefix}_UniqueUsers";
 const DEPARTMENT_ATTRIBUTE_NAME = "departmentName";
 const DEPARTMENT_UNASSIGNED = "Unassigned"
 const FULL_USER_COUNT_ATTRIBUTE_NAME = "fullUserCount";
@@ -130,19 +130,19 @@ async function processShowback() {
   // Get the current time
   const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
 
-  // Create showback.department and aggregated showback.organization metrics in NRDB
+  // Create ${tf_metric_name_prefix}.department and aggregated ${tf_metric_name_prefix}.organization metrics in NRDB
   postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, currentTimestamp);
 
-  // Create Showback_AccountUsers in NRDB
+  // Create ${tf_event_name_prefix}_AccountUsers in NRDB
   let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
 
-  // Create showback.account metrics in NRDB
+  // Create ${tf_metric_name_prefix}.account metrics in NRDB
   postAccounts(accountIdToUsersMap, accountIdToAccountMap, currentTimestamp);
 
   // Build a UniqueUsersArray
   let uniqueUsersArray = buildUniqueUsersArray(enrichedEmailToUserAndGroupsMap, emailToDepartmentSetMap);
 
-  // Create Showback_UniqueUsers in NRDB
+  // Create ${tf_event_name_prefix}_UniqueUsers in NRDB
   postUniqueUsers(uniqueUsersArray);
 
   return "Success";
@@ -254,7 +254,7 @@ function buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap)
 
 
 /**
- * Post a set of unique users to the Showback_UniqueUsers data type in NRDB.
+ * Post a set of unique users to the ${tf_event_name_prefix}_UniqueUsers data type in NRDB.
  * @param {*} uniqueUsersArray an array of unique users.
  */
 function postUniqueUsers(uniqueUsersArray) {
@@ -357,7 +357,7 @@ async function getOrgAccounts() {
 
 
 /**
- * Post a set of account users to the Showback_AccountUsers data type in NRDB.
+ * Post a set of account users to the ${tf_event_name_prefix}_AccountUsers data type in NRDB.
  * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
  * @param {*} groupIdToRolesMap a map of groups by id to their roles.
  * @param {*} accountIdToAccountMap a map of account ids to accounts.
@@ -850,20 +850,20 @@ function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departme
       if (tier) {
         attributes.tier = tier;
       }
-      let basicUserDeptMetric = getDimensionalMetricObject("showback.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, attributes);
+      let basicUserDeptMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.department.basicuser.count", "gauge", userTypeCountsObject.basic, timestamp, attributes);
       metrics.push(basicUserDeptMetric);
       aggregateUserCountObject.basic += userTypeCountsObject.basic;
 
-      let coreUserDeptMetric = getDimensionalMetricObject("showback.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, attributes);
+      let coreUserDeptMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.department.coreuser.count", "gauge", userTypeCountsObject.core, timestamp, attributes);
       metrics.push(coreUserDeptMetric);
       aggregateUserCountObject.core += userTypeCountsObject.core;
 
-      let fullUserDeptMetric = getDimensionalMetricObject("showback.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, attributes);
+      let fullUserDeptMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.department.fulluser.count", "gauge", userTypeCountsObject.full_platform, timestamp, attributes);
       metrics.push(fullUserDeptMetric);
       aggregateUserCountObject.full += userTypeCountsObject.full_platform;
 
       let totalUserDeptCount = userTypeCountsObject.basic + userTypeCountsObject.core + userTypeCountsObject.full_platform;
-      let totalUserDeptMetric = getDimensionalMetricObject("showback.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, attributes);
+      let totalUserDeptMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.department.totaluser.count", "gauge", totalUserDeptCount, timestamp, attributes);
       metrics.push(totalUserDeptMetric);
       aggregateUserCountObject.total += totalUserDeptCount;
       tierToAggregateUserCountObjectMap.set(tier, aggregateUserCountObject);
@@ -873,13 +873,13 @@ function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departme
   // Aggregates metrics
   for (const [tier, aggregateUserCountObject] of tierToAggregateUserCountObjectMap) {
     let attributes = tier ? { "tier": tier } : null;
-    let totalBasicUserMetric = getDimensionalMetricObject("showback.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, attributes);
+    let totalBasicUserMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.organization.basicuser.count", "gauge", aggregateUserCountObject.basic, timestamp, attributes);
     metrics.push(totalBasicUserMetric);
-    let totalCoreUserMetric = getDimensionalMetricObject("showback.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, attributes);
+    let totalCoreUserMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.organization.coreuser.count", "gauge", aggregateUserCountObject.core, timestamp, attributes);
     metrics.push(totalCoreUserMetric);
-    let totalFullUserMetric = getDimensionalMetricObject("showback.organization.fulluser.count", "gauge", aggregateUserCountObject.full, timestamp, attributes);
+    let totalFullUserMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.organization.fulluser.count", "gauge", aggregateUserCountObject.full, timestamp, attributes);
     metrics.push(totalFullUserMetric);
-    let totalUserMetric = getDimensionalMetricObject("showback.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, attributes);
+    let totalUserMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.organization.totaluser.count", "gauge", aggregateUserCountObject.total, timestamp, attributes);
     metrics.push(totalUserMetric);
   }
 
@@ -958,17 +958,17 @@ function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
   let metrics = new Array();
   // By account metrics
   for (const account of accountArray) {
-    let basicUserAccountMetric = getDimensionalMetricObject("showback.account.basicuser.count", "gauge", account[BASIC_USER_COUNT_ATTRIBUTE_NAME], timestamp, { "account": account.account_name, "account_id": account.account_id });
+    let basicUserAccountMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.account.basicuser.count", "gauge", account[BASIC_USER_COUNT_ATTRIBUTE_NAME], timestamp, { "account": account.account_name, "account_id": account.account_id });
     metrics.push(basicUserAccountMetric);
 
-    let coreUserAccountMetric = getDimensionalMetricObject("showback.account.coreuser.count", "gauge", account[CORE_USER_COUNT_ATTRIBUTE_NAME], timestamp,  { "account": account.account_name, "account_id": account.account_id });
+    let coreUserAccountMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.account.coreuser.count", "gauge", account[CORE_USER_COUNT_ATTRIBUTE_NAME], timestamp,  { "account": account.account_name, "account_id": account.account_id });
     metrics.push(coreUserAccountMetric);
 
-    let fullUserAccountMetric = getDimensionalMetricObject("showback.account.fulluser.count", "gauge", account[FULL_USER_COUNT_ATTRIBUTE_NAME], timestamp,  { "account": account.account_name, "account_id": account.account_id });
+    let fullUserAccountMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.account.fulluser.count", "gauge", account[FULL_USER_COUNT_ATTRIBUTE_NAME], timestamp,  { "account": account.account_name, "account_id": account.account_id });
     metrics.push(fullUserAccountMetric);
 
     let totalUserAccountCount = account[BASIC_USER_COUNT_ATTRIBUTE_NAME] + account[CORE_USER_COUNT_ATTRIBUTE_NAME] + account[FULL_USER_COUNT_ATTRIBUTE_NAME];
-    let totalUserAccountMetric = getDimensionalMetricObject("showback.account.totaluser.count", "gauge", totalUserAccountCount, timestamp,  { "account": account.account_name, "account_id": account.account_id });
+    let totalUserAccountMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.account.totaluser.count", "gauge", totalUserAccountCount, timestamp,  { "account": account.account_name, "account_id": account.account_id });
     metrics.push(totalUserAccountMetric);
   }
   chunkAndPostMetrics(metrics);

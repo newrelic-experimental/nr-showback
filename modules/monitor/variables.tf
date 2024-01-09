@@ -4,6 +4,12 @@ variable "new_relic_region" {
 variable "monitor_name" {
   type = string
 }
+variable "event_name_prefix" {
+  type = string
+}
+variable "metric_name_prefix" {
+  type = string
+}
 variable "showback_query_account_id" {
   type = string
 }

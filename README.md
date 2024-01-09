@@ -41,8 +41,13 @@ The user associated with the `TF_VAR_showback_query_user_api_key` variable must 
 
 The account IDs used for the terraform resources, billing account, and reporting account may be different, but are all likely to be the billing account.
 
-Note: You may want to update the version numbers in [provider.tf](provider.tf) and [modules/monitor/provider.tf](modules/monitor/provider.tf) to the latest versions of Terraform and the New Relic provider. You will need to update the provider.tf files if you are using the EU region.
+The wrapper file also allows the configuration of the following:
+1.  `TF_VAR_monitor_name`: the name of the showback reporting script on the reporting account
+2.  `TF_VAR_dashboard_name`: the name of the showback dashboard on the reporting account
+3.  `TF_VAR_event_name_prefix`: the prefix used in nr-showback metric names, defaults to "Showback", resulting in events of the form "Showback_UniqueUsers" for example. It is recommended that this value is modified during testing, e.g. to TestShowback, and reverted for production use
+4.  `TF_VAR_metric_name_prefix`: the prefix used in nr-showback metric names, defaults to "showback", resulting in metrics of the form "showback.department.fulluser.count" for example. It is recommended that this value is modified during testing, e.g. to test.showback, and reverted for production use
 
+Note: You may want to update the version numbers in [provider.tf](provider.tf) and [modules/monitor/provider.tf](modules/monitor/provider.tf) to the latest versions of Terraform and the New Relic provider. You will need to update both provider.tf files if you are using the EU region.
 
 ## Showback configuration
 The showback configuration is entirely within the terraform.tfvars file. Copy [terraform.tfvars.sample](terraform.tfvars.sample), which is populated with an example config to a file named `terraform.tfvars`. Modify the configuration for your account. The configuration contains:

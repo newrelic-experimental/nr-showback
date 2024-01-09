@@ -31,7 +31,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric, NrConsumption SELECT (max(`showback.department.coreuser.count`) * ${tf_core_user_usd}) + (max(`showback.department.fulluser.count`) * ${tf_full_user_usd}) + (sum(GigabytesIngested) * ${tf_gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier = '${tier}')) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier = '${tier}')) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
+                "query": "FROM Metric, NrConsumption SELECT (max(`${tf_metric_name_prefix}.department.coreuser.count`) * ${tf_core_user_usd}) + (max(`${tf_metric_name_prefix}.department.fulluser.count`) * ${tf_full_user_usd}) + (sum(GigabytesIngested) * ${tf_gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier = '${tier}')) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier = '${tier}')) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
               }
             ],
             "platformOptions": {
@@ -58,7 +58,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric, NrConsumption SELECT max(`showback.department.coreuser.count`) * ${tf_core_user_usd} + max(`showback.department.fulluser.count`) * ${tf_full_user_usd} + sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Total Cost (USD)', max(`showback.department.fulluser.count`) AS 'Full User Count', max(`showback.department.fulluser.count`) * ${tf_full_user_usd} as 'Full User Cost (USD)', max(`showback.department.coreuser.count`) AS 'Core User Count', max(`showback.department.coreuser.count`) * ${tf_core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier = '${tier}')) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier = '${tier}')) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
+                "query": "FROM Metric, NrConsumption SELECT max(`${tf_metric_name_prefix}.department.coreuser.count`) * ${tf_core_user_usd} + max(`${tf_metric_name_prefix}.department.fulluser.count`) * ${tf_full_user_usd} + sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Total Cost (USD)', max(`${tf_metric_name_prefix}.department.fulluser.count`) AS 'Full User Count', max(`${tf_metric_name_prefix}.department.fulluser.count`) * ${tf_full_user_usd} as 'Full User Cost (USD)', max(`${tf_metric_name_prefix}.department.coreuser.count`) AS 'Core User Count', max(`${tf_metric_name_prefix}.department.coreuser.count`) * ${tf_core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier = '${tier}')) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier = '${tier}')) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
               }
             ],
             "platformOptions": {
@@ -88,7 +88,7 @@
             "nrqlQueries": [
               {
                 "accountId":  ${tf_account_id},
-                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -118,7 +118,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -148,7 +148,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -178,7 +178,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier = '${tier}' LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -255,7 +255,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric, NrConsumption SELECT (max(`showback.department.coreuser.count`) * ${tf_core_user_usd}) + (max(`showback.department.fulluser.count`) * ${tf_full_user_usd}) + (sum(GigabytesIngested) * ${tf_gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier IS NULL)) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
+                "query": "FROM Metric, NrConsumption SELECT (max(`${tf_metric_name_prefix}.department.coreuser.count`) * ${tf_core_user_usd}) + (max(`${tf_metric_name_prefix}.department.fulluser.count`) * ${tf_full_user_usd}) + (sum(GigabytesIngested) * ${tf_gb_ingest_usd}) AS 'Total Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier IS NULL)) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
               }
             ],
             "platformOptions": {
@@ -282,7 +282,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric, NrConsumption SELECT max(`showback.department.coreuser.count`) * ${tf_core_user_usd} + max(`showback.department.fulluser.count`) * ${tf_full_user_usd} + sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Total Cost (USD)', max(`showback.department.fulluser.count`) AS 'Full User Count', max(`showback.department.fulluser.count`) * ${tf_full_user_usd} as 'Full User Cost (USD)', max(`showback.department.coreuser.count`) AS 'Core User Count', max(`showback.department.coreuser.count`) * ${tf_core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier IS NULL)) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
+                "query": "FROM Metric, NrConsumption SELECT max(`${tf_metric_name_prefix}.department.coreuser.count`) * ${tf_core_user_usd} + max(`${tf_metric_name_prefix}.department.fulluser.count`) * ${tf_full_user_usd} + sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Total Cost (USD)', max(`${tf_metric_name_prefix}.department.fulluser.count`) AS 'Full User Count', max(`${tf_metric_name_prefix}.department.fulluser.count`) * ${tf_full_user_usd} as 'Full User Cost (USD)', max(`${tf_metric_name_prefix}.department.coreuser.count`) AS 'Core User Count', max(`${tf_metric_name_prefix}.department.coreuser.count`) * ${tf_core_user_usd} as 'Core User Cost (USD)', sum(GigabytesIngested) AS ingestGigabytes, sum(GigabytesIngested) * ${tf_gb_ingest_usd} AS 'Ingest Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}' AND (tier IS NULL)) OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } as '${department.department_name}', %{ endfor ~}WHERE (department = 'Unassigned' AND (tier IS NULL)) OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
               }
             ],
             "platformOptions": {
@@ -312,7 +312,7 @@
             "nrqlQueries": [
               {
                 "accountId":  ${tf_account_id},
-                "query": "SELECT latest(`showback.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.fulluser.count`) AS 'Full User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -342,7 +342,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.coreuser.count`) AS 'Core User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -372,7 +372,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.basicuser.count`) AS 'Basic User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -402,7 +402,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT latest(`showback.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
+                "query": "SELECT latest(`${tf_metric_name_prefix}.department.totaluser.count`) AS 'Total User Count' FROM Metric SINCE 1 DAY AGO facet department WHERE tier IS NULL LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -475,7 +475,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric SELECT latest(`showback.account.basicuser.count`) AS 'Basic', latest(`showback.account.coreuser.count`) AS 'Core', latest(`showback.account.fulluser.count`) AS 'Full', latest(`showback.account.basicuser.count`)+latest(`showback.account.coreuser.count`)+latest(`showback.account.fulluser.count`) AS 'Total' since 24 hours ago facet account LIMIT MAX "
+                "query": "FROM Metric SELECT latest(`${tf_metric_name_prefix}.account.basicuser.count`) AS 'Basic', latest(`${tf_metric_name_prefix}.account.coreuser.count`) AS 'Core', latest(`${tf_metric_name_prefix}.account.fulluser.count`) AS 'Full', latest(`${tf_metric_name_prefix}.account.basicuser.count`)+latest(`${tf_metric_name_prefix}.account.coreuser.count`)+latest(`${tf_metric_name_prefix}.account.fulluser.count`) AS 'Total' since 24 hours ago facet account LIMIT MAX "
               }
             ],
             "platformOptions": {
@@ -505,7 +505,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT (latest(`showback.organization.basicuser.count`) OR 0 ) + (latest(`showback.organization.coreuser.count`) OR 0) + (latest(`showback.organization.fulluser.count`) OR 0) AS 'Users'\nFROM Metric SINCE 1 day AGO\nFACET cases(\n  WHERE metricName = 'showback.organization.basicuser.count' AS 'Basic',\n  WHERE metricName = 'showback.organization.coreuser.count' AS 'Core',\n  WHERE metricName = 'showback.organization.fulluser.count' AS 'Full'\n)"
+                "query": "SELECT (latest(`${tf_metric_name_prefix}.organization.basicuser.count`) OR 0 ) + (latest(`${tf_metric_name_prefix}.organization.coreuser.count`) OR 0) + (latest(`${tf_metric_name_prefix}.organization.fulluser.count`) OR 0) AS 'Users'\nFROM Metric SINCE 1 day AGO\nFACET cases(\n  WHERE metricName = '${tf_metric_name_prefix}.organization.basicuser.count' AS 'Basic',\n  WHERE metricName = '${tf_metric_name_prefix}.organization.coreuser.count' AS 'Core',\n  WHERE metricName = '${tf_metric_name_prefix}.organization.fulluser.count' AS 'Full'\n)"
               }
             ],
             "platformOptions": {
@@ -535,7 +535,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT (latest(`showback.organization.basicuser.count`) OR 0 ) + (latest(`showback.organization.coreuser.count`) OR 0) + (latest(`showback.organization.fulluser.count`) OR 0) AS 'Users'\nFROM Metric SINCE 1 month AGO TIMESERIES AUTO\nFACET cases(\n  WHERE metricName = 'showback.organization.basicuser.count' AS 'Basic',\n  WHERE metricName = 'showback.organization.coreuser.count' AS 'Core',\n  WHERE metricName = 'showback.organization.fulluser.count' AS 'Full'\n)"
+                "query": "SELECT (latest(`${tf_metric_name_prefix}.organization.basicuser.count`) OR 0 ) + (latest(`${tf_metric_name_prefix}.organization.coreuser.count`) OR 0) + (latest(`${tf_metric_name_prefix}.organization.fulluser.count`) OR 0) AS 'Users'\nFROM Metric SINCE 1 month AGO TIMESERIES AUTO\nFACET cases(\n  WHERE metricName = '${tf_metric_name_prefix}.organization.basicuser.count' AS 'Basic',\n  WHERE metricName = '${tf_metric_name_prefix}.organization.coreuser.count' AS 'Core',\n  WHERE metricName = '${tf_metric_name_prefix}.organization.fulluser.count' AS 'Full'\n)"
               }
             ],
             "platformOptions": {
@@ -572,7 +572,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT timestamp, email, full_name, last_access_at, user_tier_name, departmentSet FROM Showback_UniqueUsers LIMIT MAX SINCE 1 day ago"
+                "query": "SELECT timestamp, email, full_name, last_access_at, user_tier_name, departmentSet FROM ${tf_event_name_prefix}_UniqueUsers LIMIT MAX SINCE 1 day ago"
               }
             ],
             "platformOptions": {
@@ -606,7 +606,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric SELECT uniqueCount(account) AS Accounts SINCE 1 day ago WHERE metricName = 'showback.account.totaluser.count' LIMIT MAX"
+                "query": "FROM Metric SELECT uniqueCount(account) AS Accounts SINCE 1 day ago WHERE metricName = '${tf_metric_name_prefix}.account.totaluser.count' LIMIT MAX"
               }
             ],
             "platformOptions": {
@@ -634,7 +634,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "FROM Metric SELECT latest(`showback.account.basicuser.count`) AS 'Basic', latest(`showback.account.coreuser.count`) AS 'Core', latest(`showback.account.fulluser.count`) AS 'Full', latest(`showback.account.basicuser.count`)+latest(`showback.account.coreuser.count`)+latest(`showback.account.fulluser.count`) AS 'Total' since 24 hours ago facet account LIMIT MAX "
+                "query": "FROM Metric SELECT latest(`${tf_metric_name_prefix}.account.basicuser.count`) AS 'Basic', latest(`${tf_metric_name_prefix}.account.coreuser.count`) AS 'Core', latest(`${tf_metric_name_prefix}.account.fulluser.count`) AS 'Full', latest(`${tf_metric_name_prefix}.account.basicuser.count`)+latest(`${tf_metric_name_prefix}.account.coreuser.count`)+latest(`${tf_metric_name_prefix}.account.fulluser.count`) AS 'Total' since 24 hours ago facet account LIMIT MAX "
               }
             ],
             "platformOptions": {
@@ -668,7 +668,7 @@
             "nrqlQueries": [
               {
                 "accountId": ${tf_account_id},
-                "query": "SELECT  timestamp, account_id, account_name, email, full_name, last_access_at, user_tier_name, user_role \n FROM Showback_AccountUsers LIMIT MAX order by last_access_at desc since 1 day ago"
+                "query": "SELECT  timestamp, account_id, account_name, email, full_name, last_access_at, user_tier_name, user_role \n FROM ${tf_event_name_prefix}_AccountUsers LIMIT MAX order by last_access_at desc since 1 day ago"
               }
             ],
             "platformOptions": {

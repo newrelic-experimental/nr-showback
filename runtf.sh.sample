@@ -15,5 +15,7 @@ export TF_VAR_showback_insert_license_api_key="xxxNRAL"  # An Ingest API key for
 
 export TF_VAR_monitor_name="NR Showback reporting script"  # The name of the showback reporting script on the reporting account
 export TF_VAR_dashboard_name="NR Showback reporting"  # The name of the showback dashboard on the reporting account
+export TF_VAR_event_name_prefix="Showback"  # The prefix used in nr-showback metric names, defaults to "Showback", resulting in events of the form "Showback_UniqueUsers" for example. It is recommended that this value is modified during testing, e.g. to TestShowback, and reverted for production use
+export TF_VAR_metric_name_prefix="showback"  # The prefix used in nr-showback metric names, defaults to "showback", resulting in metrics of the form "showback.department.fulluser.count" for example. It is recommended that this value is modified during testing, e.g. to test.showback, and reverted for production use
 
 bash -c "terraform $1 $2"

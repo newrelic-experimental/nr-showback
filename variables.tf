@@ -7,6 +7,12 @@ variable "monitor_name" {
 variable "dashboard_name" {
   type = string
 }
+variable "event_name_prefix" {
+  type = string
+}
+variable "metric_name_prefix" {
+  type = string
+}
 variable "showback_query_account_id" {
   type = string
 }
