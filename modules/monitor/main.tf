@@ -12,6 +12,8 @@ locals {
       tf_showback_ignore_newrelic_users = var.showback_ignore.newrelic_users
       tf_showback_config = var.showback_config
       tf_dept_to_tier_map = local.dept_to_tier_map
+      tf_event_name_prefix = var.event_name_prefix
+      tf_metric_name_prefix = var.metric_name_prefix
     }
   )
 }

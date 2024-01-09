@@ -26,5 +26,9 @@ set "TF_VAR_showback_insert_license_api_key=xxxNRAL"
 set "TF_VAR_monitor_name=NR Showback reporting script"
 :: The name of the showback dashboard on the reporting account
 set "TF_VAR_dashboard_name=NR Showback reporting"
+:: The prefix used in nr-showback metric names, defaults to "Showback", resulting in events of the form "Showback_UniqueUsers" for example. It is recommended that this value is modified during testing, e.g. to TestShowback, and reverted for production use
+set "TF_VAR_event_name_prefix=Showback"
+:: The prefix used in nr-showback metric names, defaults to "showback", resulting in metrics of the form "showback.department.fulluser.count" for example. It is recommended that this value is modified during testing, e.g. to test.showback, and reverted for production use
+set "TF_VAR_metric_name_prefix=showback"
 
 terraform %~1 %~2 %~3
