@@ -419,10 +419,161 @@
           }
         },
         {
-          "title": "Total Consumption by Month",
+          "title": "Data Ingest Usage & Cost by Department",
           "layout": {
             "column": 1,
             "row": 8,
+            "width": 12,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM Metric, NrConsumption SELECT sum(GigabytesIngested) AS 'Total Ingest GB', if((SELECT sum(GigabytesIngested) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) > ${tf_min_gb_ingest}, sum(GigabytesIngested) / (SELECT sum(GigabytesIngested) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) * ((SELECT sum(GigabytesIngested) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) - ${tf_min_gb_ingest}), 0) AS 'Ingest Above Commit GB', (sum(GigabytesIngested) / (SELECT sum(GigabytesIngested) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) * if((SELECT sum(GigabytesIngested) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) > ${tf_min_gb_ingest}, ${tf_min_gb_ingest} * ${tf_gb_ingest_committed_usd} + ((SELECT sum(GigabytesIngested) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) - ${tf_min_gb_ingest}) * ${tf_gb_ingest_additional_usd}, ${tf_min_gb_ingest} * ${tf_gb_ingest_committed_usd})) AS 'Ingest Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}') OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE department = 'Unassigned' OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
+              }
+            ],
+            "dataFormatters": [
+              {
+                "name": "Ingest Cost (USD)",
+                "precision": 2,
+                "type": "decimal"
+              },
+              {
+                "name": "Total Ingest GB",
+                "precision": 2,
+                "type": "decimal"
+              },
+              {
+                "name": "Ingest Above Commit GB",
+                "precision": 2,
+                "type": "decimal"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Synthetics Usage & Cost by Department",
+          "layout": {
+            "column": 1,
+            "row": 11,
+            "width": 12,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM Metric, NrConsumption SELECT sum(SyntheticChecks) AS 'Total Checks', if((SELECT sum(SyntheticChecks) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) > ${tf_synthetics_checks_included}, sum(SyntheticChecks) / (SELECT sum(SyntheticChecks) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) * ((SELECT sum(SyntheticChecks) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) - ${tf_synthetics_checks_included}), 0) AS 'Billable Checks', (sum(SyntheticChecks) / (SELECT sum(SyntheticChecks) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) * if((SELECT sum(SyntheticChecks) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) > ${tf_synthetics_checks_included}, ((SELECT sum(SyntheticChecks) FROM NrConsumption WHERE consumingAccountName IS NOT NULL SINCE this month) - ${tf_synthetics_checks_included}) * ${tf_synthetics_additional_check_usd}, 0)) AS 'Synthetics Cost (USD)' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}') OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE department = 'Unassigned' OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department'"
+              }
+            ],
+            "dataFormatters": [
+              {
+                "name": "Synthetics Cost (USD)",
+                "precision": 2,
+                "type": "decimal"
+              },
+              {
+                "name": "Total Checks",
+                "precision": 0,
+                "type": "decimal"
+              },
+              {
+                "name": "Billable Checks",
+                "precision": 0,
+                "type": "decimal"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Synthetics Checks by Department",
+          "layout": {
+            "column": 1,
+            "row": 14,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.pie"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": true
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM Metric, NrConsumption SELECT sum(SyntheticChecks) AS 'Synthetics Checks' SINCE this month FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}') OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE department = 'Unassigned' OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department' LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            }
+          }
+        },
+        {
+          "title": "Synthetics Usage Over Time",
+          "layout": {
+            "column": 5,
+            "row": 14,
+            "width": 8,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "legend": {
+              "enabled": true
+            },
+            "nrqlQueries": [
+              {
+                "accountId": ${tf_account_id},
+                "query": "FROM Metric, NrConsumption SELECT sum(SyntheticChecks) AS 'Synthetics Checks' SINCE 3 months ago FACET CASES(%{ for index_department, department in tf_showback_config ~}WHERE (department = '${department.department_name}') OR consumingAccountName IN (%{ for index_accounts_in, account in department.accounts_in }%{ if index_accounts_in != 0 ~}, %{ endif }'${account}'%{ endfor ~})%{ for regex in department.accounts_regex } OR consumingAccountName RLIKE r'${regex}'%{ endfor } AS '${department.department_name}', %{ endfor ~}WHERE department = 'Unassigned' OR consumingAccountName IS NOT NULL AS 'Unassigned') AS 'department' TIMESERIES AUTO LIMIT MAX"
+              }
+            ],
+            "platformOptions": {
+              "ignoreTimeRange": false
+            },
+            "yAxisLeft": {
+              "zero": true
+            }
+          }
+        },
+        {
+          "title": "Total Consumption by Month",
+          "layout": {
+            "column": 1,
+            "row": 17,
             "width": 12,
             "height": 4
           },

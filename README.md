@@ -263,11 +263,22 @@ The dashboard, default name `NR Showback reporting`, contains three pages with *
 1. **`Department Showback`** (Main cost allocation page)
 - **Proportional cost breakdown** by department with automatic commitment/additional calculations
 - **Real-time allocation**: Uses live consumption data for accurate department cost shares
-- **Pie charts** showing cost distribution across departments  
-- **Detailed table** with individual cost components:
+- **Pie charts** showing cost distribution across departments
+- **Detailed cost table** with individual cost components:
   - Core/Full user costs (direct allocation)
   - **Ingest costs** (proportional allocation of org minimum or actual costs)
-  - **Synthetics costs** (proportional allocation of excess above 1M free checks)
+  - **Synthetics costs** (proportional allocation of excess above included checks)
+- **Data Ingest Usage & Cost table** showing:
+  - Total Ingest GB per department
+  - Ingest Above Commit GB (usage beyond minimum commitment)
+  - Ingest Cost (USD) with proportional allocation
+- **Synthetics Usage & Cost table** showing:
+  - Total Checks per department
+  - Billable Checks (usage beyond included amount)
+  - Synthetics Cost (USD) with proportional allocation
+- **Synthetics visualization charts**:
+  - Pie chart showing distribution of synthetics checks across departments
+  - Line chart showing 3-month trend of synthetics usage by department
 - **User distribution** widgets showing breakdown by type per department
 - **Monthly trending** table showing historical consumption with commitment-based billing
 
