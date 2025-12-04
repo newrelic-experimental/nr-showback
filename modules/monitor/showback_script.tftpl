@@ -316,7 +316,7 @@ async function getOrgAccounts() {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -512,7 +512,7 @@ async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGro
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(),
@@ -1075,7 +1075,7 @@ async function getAuthDomainToGroupsMap(authDomainsArray) {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -1142,7 +1142,7 @@ async function getAuthDomainsArray() {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -1302,7 +1302,7 @@ async function getGroupIdAndRolesObject(authDomain, group) {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -1401,7 +1401,7 @@ async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(),
@@ -1498,7 +1498,7 @@ async function getGroupUsersByCursor(authDomainId, group) {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -1545,7 +1545,7 @@ async function postWithRetries(options) {
   let currentError;
   do {
     try {
-      response = await $http.post(options);
+      response = await got.post(options);
       let responseBody = JSON.parse(response.body);
       if (responseBody.hasOwnProperty('errors')) {
         console.error(responseBody.errors);
