@@ -32,6 +32,10 @@ locals {
       tf_min_gb_ingest                   = var.showback_price.min_gb_ingest
       tf_synthetics_checks_included      = var.showback_price.synthetics_checks_included
       tf_synthetics_additional_check_usd = coalesce(var.showback_price.synthetics_additional_check_usd, 0)
+      tf_accu_unit_usd                   = coalesce(var.showback_price.accu_unit_usd, 0)
+      tf_accu_committed_usd              = coalesce(var.showback_price.accu_committed_usd, 0)
+      tf_accu_additional_usd             = coalesce(var.showback_price.accu_additional_usd, 0)
+      tf_min_accu                        = var.showback_price.min_accu
       tf_prorate_minimums                = var.showback_price.prorate_minimums
       tf_unique_tiers                    = local.unique_tiers
       tf_unique_accounts                 = local.unique_accounts

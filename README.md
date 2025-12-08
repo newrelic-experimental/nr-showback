@@ -2,7 +2,7 @@
 
 # nr-showback
 
-This repository provides an automated way to report New Relic ingest consumption and user costs, by business department, using aggregated account-based cost allocation. **Now with advanced proportional cost allocation and synthetics billing** for enterprise contract models.
+This repository provides an automated way to report New Relic ingest consumption and user costs, by business department, using aggregated account-based cost allocation. **Now with advanced proportional cost allocation, synthetics billing, and Advanced Compute (aCCU) support** for enterprise contract models.
 
 ![Data flow diagram](screenshots/nr-showback-data-flow-diagram.png)
 
@@ -14,10 +14,11 @@ A single [terraform.tfvars](terraform.tfvars) file contains the definition of de
 
 This solution now supports **sophisticated cost allocation models** for enterprise New Relic contracts:
 
-### 🔄 **Proportional Cost Allocation** 
+### 🔄 **Proportional Cost Allocation**
 Departments pay **fair shares** of organizational costs based on their actual usage:
 - **Ingest Costs**: When your organization doesn't meet the minimum commitment (e.g., 2,500GB), each department pays their proportional share of the minimum cost
 - **Synthetics Costs**: After the included checks (typically 1,000,000), excess costs are allocated proportionally by department usage
+- **aCCU Costs**: When usage is below minimum aCCU commitment, each department pays their proportional share of the commitment cost
 - **Real-time Calculations**: Uses live consumption data for accurate, up-to-date cost allocation
 
 - Organization total: 1,800GB (under 2,500GB minimum)
@@ -38,6 +39,12 @@ Departments pay **fair shares** of organizational costs based on their actual us
 - **Included Checks**: First 1,000,000 synthetic checks per month are included (configurable based on your contract)
 - **Proportional Billing**: Excess checks beyond included amount are charged at $0.005/check (configurable)
 - **Department Allocation**: Each department pays their proportional share of total excess costs
+
+### 🚀 **Advanced Compute (aCCU) Support**
+- **What is aCCU**: Advanced Compute Capacity Units power features like logs, vulnerability management, and other compute-intensive workloads ([learn more](https://docs.newrelic.com/docs/accounts/accounts-billing/new-relic-one-pricing-billing/new-relic-one-pricing-billing/))
+- **Commitment-based Pricing**: Minimum aCCU commitments with committed and additional rates
+- **Proportional Allocation**: When usage is below minimum commitment, departments pay their proportional share
+- **Real-time Tracking**: Dashboard tracks aCCU consumption by department with cost allocation
 
 **Example Synthetics Allocation:**
 - Organization total: 1,500,000 checks
@@ -133,10 +140,11 @@ Note: You may want to update the version numbers in [provider.tf](provider.tf) a
 The showback configuration is entirely within the terraform.tfvars file. Copy [terraform.tfvars.sample](terraform.tfvars.sample), which is populated with an example config to a file named `terraform.tfvars`. Modify the configuration for your account. The configuration contains:
 - `showback_price`: the costs for:
   - full users (`full_user_usd`)
-  - core users (`core_user_usd`) 
+  - core users (`core_user_usd`)
   - billable ingest per GB (`gb_ingest_usd`)
   - **New**: Minimum commitments and committed/additional rates
   - **New**: Synthetics pricing (`synthetics_checks_included`, `synthetics_additional_check_usd`)
+  - **New**: Advanced Compute (aCCU) pricing (`accu_unit_usd`, `accu_committed_usd`, `accu_additional_usd`, `min_accu`)
 - `showback_ignore.groups`: whether specific user group membership should be ignored. Some customers grant read-only access to all accounts, which breaks the script’s showback user apportioning
 - `showback_ignore.newrelic`: whether New Relic employees should be ignored in the showback charge, set to `true`, but can be changed
 - `showback_config`: for each department, the `department_name`, an optional `tier` value (for grouping departments into higher level reporting units), and accounts either as a list (`accounts_in`) or as a list of one or more regular expressions (`accounts_regex`)
@@ -150,7 +158,7 @@ The dashboard uses different data sources for different purposes:
 
 **Department Cost Allocation** (Real-time):
 - **Data Source**: `NrConsumption` (current month, real-time)
-- **Metrics**: `GigabytesIngested` (total usage including free 100GB), `SyntheticChecks`
+- **Metrics**: `GigabytesIngested` (total usage including free 100GB), `SyntheticChecks`, `AdvancedCCU`
 - **Purpose**: Fair proportional allocation based on actual consumption
 - **Why**: Departments should pay based on their share of total usage, not just billable amounts
 
@@ -202,9 +210,14 @@ showback_price = {
   full_user_additional_usd = 99
   gb_ingest_additional_usd = 0.35
   
-  # Synthetics pricing (new)
+  # Synthetics pricing (optional)
   synthetics_checks_included = 1000000    # 1M free checks
   synthetics_additional_check_usd = 0.005 # $0.005/additional check
+
+  # Advanced Compute (aCCU) pricing (optional - fictional rates for example)
+  accu_committed_usd = 0.50               # $0.50 per aCCU at commitment
+  accu_additional_usd = 0.60              # $0.60 per aCCU above commitment
+  min_accu = 100                          # Minimum 100 aCCU per month
 }
 ```
 
@@ -221,9 +234,16 @@ When your organization doesn't meet minimum commitments, costs are allocated fai
 - **Billable checks**: 500,000 excess checks
 - **Total org cost**: 500,000 × $0.005 = $2,500
 - **Department allocation**: Based on each department's % of total checks
+
+**aCCU Example** (Organization uses 85 aCCU, minimum is 100 aCCU):
+- **Total org cost**: 100 × $0.50 = $50 (paying minimum commitment)
+- **Department B**: 25.5 aCCU usage = 25.5/85 = 30% of total usage
+- **Department B cost**: $50 × 30% = $15 (proportional share)
+
 ### **Key Features**
 - ✅ **Proportional Cost Allocation**: Fair distribution when under minimum commitments
-- ✅ **Synthetics Cost Management**: 1M free checks, then proportional billing  
+- ✅ **Synthetics Cost Management**: Configurable included checks, then proportional billing
+- ✅ **Advanced Compute (aCCU) Support**: Commitment-based aCCU pricing with proportional allocation
 - ✅ **Real-time Calculations**: Uses live `NrConsumption` data for accurate allocation
 - ✅ **Backward Compatible**: Existing configurations continue to work unchanged
 - ✅ **Flexible Pricing**: Different rates for committed vs. additional usage
