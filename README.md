@@ -236,9 +236,9 @@ When your organization doesn't meet minimum commitments, costs are allocated fai
 - **Department allocation**: Based on each department's % of total checks
 
 **aCCU Example** (Organization uses 85 aCCU, minimum is 100 aCCU):
-- **Total org cost**: 100 × $50 = $5,000 (paying minimum commitment)
+- **Total org cost**: 100 × $0.50 = $50 (paying minimum commitment)
 - **Department B**: 25.5 aCCU usage = 25.5/85 = 30% of total usage
-- **Department B cost**: $5,000 × 30% = $1,500 (proportional share)
+- **Department B cost**: $50 × 30% = $15 (proportional share)
 
 ### **Key Features**
 - ✅ **Proportional Cost Allocation**: Fair distribution when under minimum commitments
