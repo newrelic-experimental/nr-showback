@@ -214,9 +214,9 @@ showback_price = {
   synthetics_checks_included = 1000000    # 1M free checks
   synthetics_additional_check_usd = 0.005 # $0.005/additional check
 
-  # Advanced Compute (aCCU) pricing (optional)
-  accu_committed_usd = 50                 # $50 per aCCU at commitment
-  accu_additional_usd = 60                # $60 per aCCU above commitment
+  # Advanced Compute (aCCU) pricing (optional - fictional rates for example)
+  accu_committed_usd = 0.50               # $0.50 per aCCU at commitment
+  accu_additional_usd = 0.60              # $0.60 per aCCU above commitment
   min_accu = 100                          # Minimum 100 aCCU per month
 }
 ```
