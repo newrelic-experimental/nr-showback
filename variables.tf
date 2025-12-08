@@ -52,13 +52,19 @@ variable "showback_price" {
     synthetics_checks_included      = optional(number, 0)
     synthetics_additional_check_usd = optional(number)
 
+    # Optional: Advanced Compute (aCCU) pricing
+    accu_unit_usd       = optional(number, 0)
+    accu_committed_usd  = optional(number)
+    accu_additional_usd = optional(number)
+    min_accu            = optional(number, 0)
+
     # Optional: Partial month commitment handling
     prorate_minimums = optional(bool, false)
   })
 
   validation {
-    condition     = var.showback_price.min_core_users >= 0 && var.showback_price.min_full_users >= 0 && var.showback_price.min_gb_ingest >= 0 && var.showback_price.synthetics_checks_included >= 0
-    error_message = "Minimum commitments and synthetics checks included must be non-negative numbers."
+    condition     = var.showback_price.min_core_users >= 0 && var.showback_price.min_full_users >= 0 && var.showback_price.min_gb_ingest >= 0 && var.showback_price.synthetics_checks_included >= 0 && var.showback_price.min_accu >= 0
+    error_message = "Minimum commitments, synthetics checks included, and minimum aCCU must be non-negative numbers."
   }
 
   validation {
@@ -81,6 +87,18 @@ variable "showback_price" {
       (var.showback_price.synthetics_checks_included > 0 && var.showback_price.synthetics_additional_check_usd != null)
     )
     error_message = "When synthetics checks included is specified, synthetics additional check rate must also be provided."
+  }
+
+  validation {
+    condition = (
+      # Either no aCCU minimum is set (no aCCU pricing)
+      var.showback_price.min_accu == 0 ||
+      # Or if aCCU minimum is set, both committed and additional rates must be provided
+      (var.showback_price.min_accu > 0 &&
+       var.showback_price.accu_committed_usd != null &&
+       var.showback_price.accu_additional_usd != null)
+    )
+    error_message = "When minimum aCCU commitment is specified, both committed and additional aCCU rates must be provided."
   }
 }
 variable "showback_ignore" {

@@ -27,6 +27,13 @@ showback_price = {  # Standard plan, Oct 2025
   # synthetics_checks_included = 1000000,  # Number of synthetics checks included per month
   # synthetics_additional_check_usd = 0.005,  # Price per additional synthetics check
 
+  # Optional: Advanced Compute (aCCU) pricing
+  # Uncomment and set these when you have aCCU pricing in your contract
+  # accu_unit_usd = 0.00,              # Price per aCCU unit (simple pricing, when min_accu = 0)
+  # accu_committed_usd = 0.00,         # Price per aCCU at commitment level (with minimums)
+  # accu_additional_usd = 0.00,        # Price per aCCU above minimum commitment
+  # min_accu = 0,                      # Minimum committed aCCU per month
+
   # Optional: Partial month commitment handling (defaults to false)
   # prorate_minimums = false,          # true = prorate minimums for partial months, false = full commitment regardless
 }
