@@ -254,4 +254,4 @@ New Relic offers two primary consumption-based pricing models:
 
 ---
 
-*Last updated: December 1, 2025*
+*Last updated: December 8, 2025*

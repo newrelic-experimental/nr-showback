@@ -10,5 +10,5 @@ terraform {
 }
 
 provider "newrelic" {
-  region = "EU" 
+  region = "US" 
 }
