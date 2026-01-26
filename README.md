@@ -378,6 +378,53 @@ The dashboard uses sophisticated NRQL queries with proportional allocation logic
 - **Backward compatibility** preserved for existing simple pricing configurations
 - **Subquery protection** prevents FACET filtering from corrupting organizational total calculations
 
+### **⚠️ Important: NRQL 3-Subquery Limitation**
+
+The dashboard uses **NRQL WITH clauses** to calculate organization-wide totals for proportional cost allocation. NRQL has a hard limit of **3 subqueries** per WITH clause.
+
+**What This Means:**
+The system dynamically determines which metrics need WITH subqueries based on your pricing configuration. A metric requires a WITH subquery when:
+- It has a minimum commitment > 0, AND
+- It has different committed vs. additional rates (for tiered pricing), OR
+- It requires proportional allocation across departments (ingest, synthetics)
+
+**Maximum Complexity:**
+You can have **at most 3 metrics** requiring WITH subqueries. The system validates this at terraform plan time.
+
+**Example Configurations:**
+
+✅ **Valid (3 subqueries)**:
+```hcl
+min_full_users = 5              # WITH needed (committed: $99, additional: $95)
+min_gb_ingest = 2500            # WITH needed (committed: $0.30, additional: $0.35)
+synthetics_checks_included = 1M  # WITH needed (proportional allocation)
+min_core_users = 10             # NO WITH needed (same rates: $49/$49)
+min_accu = 0                    # NO WITH needed (no minimum)
+```
+
+❌ **Invalid (4 subqueries - exceeds limit)**:
+```hcl
+min_full_users = 5              # WITH needed (different rates: $99 vs $95)
+min_core_users = 10             # WITH needed (different rates: $49 vs $45)
+min_gb_ingest = 2500            # WITH needed (different rates: $0.30 vs $0.35)
+synthetics_checks_included = 1M  # WITH needed (proportional)
+# ERROR: 4 subqueries required, maximum is 3
+```
+
+**How to Fix Exceeding the Limit:**
+If your configuration requires >3 subqueries, make some metrics use the same committed and additional rates:
+```hcl
+core_user_committed_usd = 49
+core_user_additional_usd = 49    # Same rate = no WITH subquery needed
+```
+
+**Validation:**
+When you run `./runtf.sh plan`, the system automatically validates your configuration. If it exceeds 3 subqueries, you'll see:
+```
+ERROR: Your pricing configuration requires 4 WITH subqueries, but NRQL only supports 3.
+Please adjust your pricing to use the same committed and additional rates for some metrics.
+```
+
 # Support
 
 New Relic has open-sourced this project. This project is provided AS-IS WITHOUT WARRANTY OR DEDICATED SUPPORT. Issues and contributions should be reported to the project here on GitHub.

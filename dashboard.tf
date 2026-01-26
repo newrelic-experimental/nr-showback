@@ -10,6 +10,21 @@ locals {
     ]
   ]))
 
+  # Determine which metrics need WITH subqueries (max 3 due to NRQL limit)
+  # A metric needs WITH if it has tiered pricing with different rates
+  needs_with_core_users = var.showback_price.min_core_users > 0 && coalesce(var.showback_price.core_user_committed_usd, 0) != coalesce(var.showback_price.core_user_additional_usd, 0)
+
+  needs_with_full_users = var.showback_price.min_full_users > 0 && coalesce(var.showback_price.full_user_committed_usd, 0) != coalesce(var.showback_price.full_user_additional_usd, 0)
+
+  needs_with_ingest = var.showback_price.min_gb_ingest > 0
+
+  needs_with_synth = var.showback_price.synthetics_checks_included > 0
+
+  needs_with_accu = coalesce(var.showback_price.min_accu, 0) > 0 && coalesce(var.showback_price.accu_committed_usd, 0) != coalesce(var.showback_price.accu_additional_usd, 0)
+
+  # Count total WITH subqueries needed
+  with_count = (local.needs_with_core_users ? 1 : 0) + (local.needs_with_full_users ? 1 : 0) + (local.needs_with_ingest ? 1 : 0) + (local.needs_with_synth ? 1 : 0) + (local.needs_with_accu ? 1 : 0)
+
   templatefile_render = templatefile(
     "${path.module}/dashboards/dashboard.json.tftpl",
     {
@@ -39,8 +54,26 @@ locals {
       tf_prorate_minimums                = var.showback_price.prorate_minimums
       tf_unique_tiers                    = local.unique_tiers
       tf_unique_accounts                 = local.unique_accounts
+      tf_needs_with_core_users           = local.needs_with_core_users
+      tf_needs_with_full_users           = local.needs_with_full_users
+      tf_needs_with_ingest               = local.needs_with_ingest
+      tf_needs_with_synth                = local.needs_with_synth
+      tf_needs_with_accu                 = local.needs_with_accu
     }
   )
+}
+
+# Validation: Ensure we don't exceed NRQL's 3 subquery limit
+resource "null_resource" "validate_subquery_limit" {
+  count = local.with_count > 3 ? 1 : 0
+
+  provisioner "local-exec" {
+    command = "echo 'ERROR: Your pricing configuration requires ${local.with_count} WITH subqueries, but NRQL only supports 3. Please adjust your pricing to use the same committed and additional rates for some metrics.' && exit 1"
+  }
+
+  triggers = {
+    with_count = local.with_count
+  }
 }
 
 resource "newrelic_one_dashboard_json" "templatefile_dashboard" {
