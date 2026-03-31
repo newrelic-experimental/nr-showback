@@ -12,8 +12,6 @@ if (IS_LOCAL_ENV) {
   require("../lib/simulator");
 }
 
-const got = require('got');
-
 const region = '${tf_new_relic_region}';  // 'US' | 'EU'
 if (region === 'US') {
   var nerdGraphEndpoint = 'https://api.newrelic.com/graphql';
@@ -48,9 +46,11 @@ const BASIC_USER_COUNT_ATTRIBUTE_NAME = "basicUserCount";
 const TOTAL_USER_COUNT_ATTRIBUTE_NAME = "totalUserCount";
 const SHOWBACK_REPORTING_INSERT_ACCOUNT_ID = ${tf_showback_insert_account_id};
 
-const CHUNK_SIZE = 100;
-const GQL_API_CHUNK_SIZE = 25;
+const CHUNK_SIZE = 1000;
 const MAX_RETRIES = 3;
+
+// Department-to-account mapping (hoisted to module scope to avoid rebuilding on every getDepartmentMapping call)
+const DEPARTMENT_ACCOUNTS = ${jsonencode(tf_showback_config)};
 
 
 /**
@@ -58,9 +58,15 @@ const MAX_RETRIES = 3;
  * @returns {Promise} indicating successful completion of the function.
  */
 async function processShowback() {
-  // Get org accounts
-  let managedAccountsArray = await getOrgAccounts();
-  console.log('processShowback(): managedAccountsArray:', managedAccountsArray);
+  const t0 = Date.now();
+  function elapsed(label) { console.warn(`[TIMING] $${label}: $${((Date.now() - t0) / 1000).toFixed(1)}s`); }
+
+  // Phase 1: Get org accounts and auth domains in parallel
+  let [managedAccountsArray, authDomainsArray] = await Promise.all([
+    getOrgAccounts(),
+    getAuthDomainsArray(),
+  ]);
+  elapsed('Phase 1 - accounts + auth domains');
 
   // Build a map of account ids to accounts
   let accountIdToAccountMap = new Map();
@@ -68,85 +74,44 @@ async function processShowback() {
     accountIdToAccountMap.set(account.id, account);
   }
 
-  // Get an array of auth domains for the organization
-  let authDomainsArray = await getAuthDomainsArray();
-  console.log('processShowback(): authDomainsArray:', authDomainsArray);
+  // Phase 2: Fetch all users with full data + group memberships in one pass per auth domain
+  let { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap, allGroupIds } = await getAllUsersWithGroups(authDomainsArray);
+  elapsed('Phase 2 - all users with groups (' + enrichedEmailToUserAndGroupsMap.size + ' users, ' + allGroupIds.size + ' groups)');
 
-  // Get a map of auth domains to their groups
-  let authDomainToGroupsMap = await getAuthDomainToGroupsMap(authDomainsArray);
-  console.log('processShowback(): authDomainToGroupsMap:', authDomainToGroupsMap);
+  // Phase 3: Fetch group-to-role mappings in batched calls
+  let groupIdToRolesMap = await getBatchedGroupRoles(authDomainsArray, allGroupIds);
+  elapsed('Phase 3 - batched group roles (' + groupIdToRolesMap.size + ' groups mapped)');
 
-  // Build a map of group ids to group names
-  let groupIdToGroupNameMap = new Map();
-  for (const authDomain of authDomainToGroupsMap) {
-    for (const group of authDomain[1]) {
-      groupIdToGroupNameMap.set(group.id, group.displayName);
-    }
-  }
-
-  // Get a map of groups by id to their roles
-  let groupIdToRolesMap = await getGroupIdToRolesMap(authDomainToGroupsMap); // Contains group:account relationships 
-  console.log('processShowback(): groupToRolesMap:', groupIdToRolesMap);
-
-  // Check for groups with no roles, roles with no account, and roles that reference a canceled account
-  for (const [groupId, roles] of groupIdToRolesMap) {
-    let groupName = groupIdToGroupNameMap.get(groupId);
-    if (roles.length == 0) console.warn('processShowback(): group ' + groupName + ' has no roles');
-    for (const role of roles) {
-      let account = accountIdToAccountMap.get(role.accountId);
-      if (!account) {
-        console.warn('processShowback(): group ' + groupName + ' has a role ' + role.displayName + ' with no account');
-      } else if (account.isCanceled) {
-        console.warn('processShowback(): group ' + groupName + ' has a role ' + role.displayName + ' that references a canceled account ' + account.id + ', ' + account.name);
-      }
-    }
-  }
-
-  // Get a map of groups by id to their group and users
-  let groupIdToGroupAndUsersMap = await getGroupIdToGroupAndUsersMap(authDomainsArray);  // Contains group:users relationships
-  console.log('processShowback(): getGroupIdToGroupAndUsersMap:', groupIdToGroupAndUsersMap);
-
-  // Build a map of users (by email) to their user details and groups
-  let emailToUserAndGroupsMap = buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap);  // Contains user:groups relationships
-  console.log('processShowback(): buildEmailToUserAndGroupsMap:', emailToUserAndGroupsMap);
-
-  // Enrich, and consolidate (by case email insensitive) users map
-  let { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap } = await enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap);
-  console.log('processShowback(): enrichedEmailToUserAndGroupsMap:', enrichedEmailToUserAndGroupsMap, 'consolidatedEmailToUserAndGroupsMap:', consolidatedEmailToUserAndGroupsMap);
-
-  // Build a map of users by email to their accounts, and a case insensitive map too
+  // Build maps
   let { emailToAccountSetMap, consolidatedEmailToAccountSetMap } = buildEmailToAccountsMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
+  elapsed('Phase 4a - buildEmailToAccountsMap');
 
-  // Get department to tier map
   let departmentToTierMap = getDepartmentToTierMap();
-
-  // Get the tier set
   let tierSet = getTierSet(departmentToTierMap);
-
-  // Build a map of departments to their user type counts, and also return an updated email to user map with the departments added
   let { tierToDepartmentToUserTypeCountsMapMap, emailToDepartmentSetMap } = buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, consolidatedEmailToUserAndGroupsMap, tierSet, accountIdToAccountMap);
+  elapsed('Phase 4b - buildDepartmentToUserTypeCountsMap');
 
-  // Build a map of accounts, by id, to their users
   let accountIdToUsersMap = buildAccountToUsersMap(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap);
+  elapsed('Phase 4c - buildAccountToUsersMap');
 
-  // Get the current time
-  const currentTimestamp = new Date().getTime();  // The current time in milliseconds since the Epoch
-
-  // Create ${tf_metric_name_prefix}.department and aggregated ${tf_metric_name_prefix}.organization metrics in NRDB
-  postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, currentTimestamp);
-
-  // Create ${tf_event_name_prefix}_AccountUsers in NRDB
-  let accountUsersArray = postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
-
-  // Create ${tf_metric_name_prefix}.account metrics in NRDB
-  postAccounts(accountIdToUsersMap, accountIdToAccountMap, currentTimestamp);
-
-  // Build a UniqueUsersArray
+  const currentTimestamp = new Date().getTime();
   let uniqueUsersArray = buildUniqueUsersArray(enrichedEmailToUserAndGroupsMap, emailToDepartmentSetMap);
+  elapsed('Phase 4d - buildUniqueUsersArray');
 
-  // Create ${tf_event_name_prefix}_UniqueUsers in NRDB
-  postUniqueUsers(uniqueUsersArray);
+  // Post data
+  await postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, currentTimestamp);
+  elapsed('Phase 5a - postDepartmentShowback');
 
+  await postAccountUsers(enrichedEmailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap);
+  elapsed('Phase 5b - postAccountUsers');
+
+  await postAccounts(accountIdToUsersMap, accountIdToAccountMap, currentTimestamp);
+  elapsed('Phase 5c - postAccounts');
+
+  await postUniqueUsers(uniqueUsersArray);
+  elapsed('Phase 5d - postUniqueUsers');
+
+  elapsed('TOTAL');
   return "Success";
 }
 
@@ -157,10 +122,9 @@ async function processShowback() {
  * @returns a map of department tier to a map of the count of department/cost-center/business-unit.
  */
 function getDepartmentMapping(account) {
-  let departments = ${jsonencode(tf_showback_config)};
 
   let tierToDeptSetMap = new Map();
-  for (const department of departments) {
+  for (const department of DEPARTMENT_ACCOUNTS) {
     let deptSet = new Set();
     for (const accounts_in of department.accounts_in) {
       if (accounts_in.includes(account.name)) {
@@ -183,7 +147,6 @@ function getDepartmentMapping(account) {
 
   for (const [tier, deptSetMap] of tierToDeptSetMap) {
     if (deptSetMap.size == 0) {
-      console.error("getDepartmentMapping(): The department of account", account.name, 'is unassigned in tier', tier);
       tierToDeptSetMap.set(tier, deptSetMap.add(DEPARTMENT_UNASSIGNED));
     }
   }
@@ -259,9 +222,9 @@ function buildUniqueUsersArray(emailToUserAndGroupsMap, emailToDepartmentSetMap)
  * Post a set of unique users to the ${tf_event_name_prefix}_UniqueUsers data type in NRDB.
  * @param {*} uniqueUsersArray an array of unique users.
  */
-function postUniqueUsers(uniqueUsersArray) {
+async function postUniqueUsers(uniqueUsersArray) {
   // Chunk and post array
-  chunkAndPostCustomEvents(uniqueUsersArray);
+  await chunkAndPostCustomEvents(uniqueUsersArray);
 }
 
 
@@ -269,18 +232,22 @@ function postUniqueUsers(uniqueUsersArray) {
  * Function to chunk the posting of custom events through the New Relic Event API.
  * @param {*} array an array of events to be posted in chunks.
  */
-function chunkAndPostCustomEvents(array) {
+async function chunkAndPostCustomEvents(array) {
   let chunkedArray = [];
   Array.from({
     length: Math.ceil(array.length / CHUNK_SIZE)
   }, (val, i) => {
     chunkedArray.push(array.slice(i * CHUNK_SIZE, i * CHUNK_SIZE + CHUNK_SIZE));
   });
-  // Send to the Event API
-  chunkedArray.forEach(chunk => {
-    let body = JSON.stringify(chunk, null, 2);
-    postCustomEvents(body);
-  });
+  // Send to the Event API in batches of POST_CONCURRENCY to balance speed vs rate limits
+  const POST_CONCURRENCY = 50;
+  for (let i = 0; i < chunkedArray.length; i += POST_CONCURRENCY) {
+    const batch = chunkedArray.slice(i, i + POST_CONCURRENCY);
+    await Promise.all(batch.map(chunk => {
+      let body = JSON.stringify(chunk, null, 2);
+      return postCustomEvents(body);
+    }));
+  }
 }
 
 
@@ -288,7 +255,7 @@ function chunkAndPostCustomEvents(array) {
  * Function to chunk the posting of dimensional metrics through the New Relic Metric API.
  * @param {*} array an array of data to be posted in chunks.
  */
- function chunkAndPostMetrics(array) {
+ async function chunkAndPostMetrics(array) {
   // Break out array into dimensional metrics
   let chunkedArray = [];
   Array.from({
@@ -296,14 +263,16 @@ function chunkAndPostCustomEvents(array) {
   }, (val, i) => {
     chunkedArray.push(array.slice(i * CHUNK_SIZE, i * CHUNK_SIZE + CHUNK_SIZE));
   });
-  // Send to the Event API
-  chunkedArray.forEach(chunk => {
-    const metricsPayload = [{
-      "metrics": chunk
-    }];
-    let body = JSON.stringify(metricsPayload, null, 2);
-    postMetrics(body);
-  });
+  // Send to the Metric API in batches of POST_CONCURRENCY to balance speed vs rate limits
+  const POST_CONCURRENCY = 50;
+  for (let i = 0; i < chunkedArray.length; i += POST_CONCURRENCY) {
+    const batch = chunkedArray.slice(i, i + POST_CONCURRENCY);
+    await Promise.all(batch.map(chunk => {
+      const metricsPayload = [{ "metrics": chunk }];
+      let body = JSON.stringify(metricsPayload, null, 2);
+      return postMetrics(body);
+    }));
+  }
 }
 
 
@@ -316,7 +285,7 @@ async function getOrgAccounts() {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -365,7 +334,7 @@ async function getOrgAccounts() {
  * @param {*} accountIdToAccountMap a map of account ids to accounts.
  * @returns an array of account users. 
  */
-function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap) {
+async function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdToAccountMap) {
   let accountUsersArray = [];
   for (const [email, user] of emailToUserAndGroupsMap) {
     let lastAccess = new Date(user.lastActive).getTime();
@@ -378,7 +347,7 @@ function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdT
       userTierName = 'Core';
     }
     if (!user.groups) {
-      console.log('postAccountUsers(): User has no groups', JSON.stringify(user, null, 4));
+      console.debug('postAccountUsers(): User has no groups', user.email);
       let accountUserObject = {
         account_id: null,
         account_name: null,
@@ -423,187 +392,15 @@ function postAccountUsers(emailToUserAndGroupsMap, groupIdToRolesMap, accountIdT
           accountUsersArray.push(accountUserObject);
         }
       } else {
-        console.error('postAccountUsers(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+        console.debug('postAccountUsers(): Group does not exist in groupIdToRolesMap.get(group.id)', group.displayName);
       }
     }
   };
 
+  console.debug('[TIMING] postAccountUsers: ' + accountUsersArray.length + ' events to post in ' + Math.ceil(accountUsersArray.length / CHUNK_SIZE) + ' chunks');
   // Chunk and post array
-  chunkAndPostCustomEvents(accountUsersArray);
+  await chunkAndPostCustomEvents(accountUsersArray);
   return accountUsersArray;
-}
-
-
-/**
- * Build a map of users (by email) to their user details and groups.
- * @param {*} groupIdToGroupAndUsersMap a map of groups by id to their group and users.
- * @returns a map of users (by email) to their user details and groups.
- */
-function buildEmailToUserAndGroupsMap(groupIdToGroupAndUsersMap) {
-  let emailToUserAndGroupsMap = new Map();
-  for (const [groupId, group] of groupIdToGroupAndUsersMap) {
-    if (!group.users) continue;  // Groups may have zero users
-    for (let user of group.users.users) {
-      if (emailToUserAndGroupsMap.has(user.email)) {
-        user = emailToUserAndGroupsMap.get(user.email);
-        user.groups.groups.push({ displayName: group.displayName, id: group.id });
-      } else {
-        user.groups = {
-          groups: [
-            {
-              displayName: group.displayName,
-              id: group.id
-            }
-          ]
-        };
-      }
-      if (user.email) {
-        emailToUserAndGroupsMap.set(user.email, user);
-      }
-    }
-  }
-  return emailToUserAndGroupsMap;
-}
-
-
-/**
- * Enrich a map of users (by email) with additional user details.
- * @param {*} authDomainsArray an array of auth domains
- * @param {*} emailToUserAndGroupsMap a map of users (by email) to their user details and groups.
- * @returns an object containing: an enriched map of users (by email) to their user details and groups, and a consolidated map of users (by case insensitive email) to their user details and groups.
- */
-async function enrichEmailToUserAndGroupsMap(authDomainsArray, emailToUserAndGroupsMap) {
-  const body = {
-    query: `
-      query ($authDomainId: [ID!], $usersCursor: String) {
-        actor {
-          organization {
-            userManagement {
-              authenticationDomains(id: $authDomainId) {
-                authenticationDomains {
-                  users(cursor: $usersCursor) {
-                    nextCursor
-                    users {
-                      email
-                      id
-                      lastActive
-                      name
-                      timeZone
-                      type {
-                        id
-                        displayName
-                      }
-                    }
-                  }
-                  id
-                  name
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    variables: {
-      "authDomainId": null,
-      "usersCursor": null
-    }
-  }
-  const options = {
-    url: nerdGraphEndpoint,
-    headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(),
-    retry: { // By default, Got does not retry on POST
-      limit: MAX_RETRIES,
-      methods: ['POST']
-    }
-  };
-
-  try {
-    let enrichedEmailToUserAndGroupsMap = new Map();
-    let consolidatedEmailToUserAndGroupsMap = new Map();
-    for (const authDomain of authDomainsArray) {
-      body.variables.authDomainId = authDomain.id;
-      options.body = JSON.stringify(body);
-      console.log('enrichEmailToUserAndGroupsMap(): authDomain.id:', authDomain.id);
-      let users = [];
-      do {
-        console.debug('enrichEmailToUserAndGroupsMap() postWithRetries, Auth Domain:' + authDomain.name);
-        let response = await postWithRetries(options);
-        console.log('enrichEmailToUserAndGroupsMap(): options:', options);
-        let responseBody = JSON.parse(response.body);
-        if (responseBody.hasOwnProperty('errors')) {
-          console.error(responseBody.errors);
-        }
-        let usersArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users;
-        users = users.concat(usersArray);
-        body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.nextCursor;
-        options.body = JSON.stringify(body);
-      } while (body.variables.usersCursor)
-      // Enrich emailToUserAndGroupsMap with additional user data
-      for (const user of users) {
-        let originalUser = emailToUserAndGroupsMap.get(user.email);
-        let enrichedUser = Object.assign(user, originalUser);  // Copy all enumerable own properties from originalUser to user
-        if (user.email) {
-          enrichedEmailToUserAndGroupsMap.set(user.email, enrichedUser);
-        }
-
-        // Consolidate users with multiple email cases (email address, user type, last active time, and groups)
-        let caseInsensitiveEmail = user.email?.toLowerCase();
-        if (consolidatedEmailToUserAndGroupsMap.has(caseInsensitiveEmail)) {  // A case insensitive email address already exists
-          let consolidatedUser = consolidatedEmailToUserAndGroupsMap.get(caseInsensitiveEmail);
-          // Consolidate to a case insensitive email address
-          consolidatedUser.email = caseInsensitiveEmail;
-          // Consolidate the user type
-          if (consolidatedUser.type.displayName == 'Basic' && enrichedUser.type.displayName == 'Core') {
-            consolidatedUser.type = enrichedUser.type;  // Update the type to Core
-            consolidatedUser.id = enrichedUser.id;
-            consolidatedUser.name = enrichedUser.name;
-            consolidatedUser.timeZone = enrichedUser.timeZone;
-          } else if ((consolidatedUser.type.displayName == 'Basic' || consolidatedUser.type.displayName == 'Core') && enrichedUser.type.displayName == 'Full platform') {
-            consolidatedUser.type = enrichedUser.type;  // Update the user type to Full
-            consolidatedUser.id = enrichedUser.id;
-            consolidatedUser.name = enrichedUser.name;
-            consolidatedUser.timeZone = enrichedUser.timeZone;
-          }
-          // Consolidate to the latest active time
-          if (enrichedUser.lastActive) {
-            if (consolidatedUser.lastActive) {
-              // Set the latest of the two last active times
-              let enrichedLastActiveMillis = new Date(enrichedUser.lastActive).getTime();
-              let consolidatedLastActiveMillis = new Date(consolidatedUser.lastActive).getTime();
-              if (enrichedLastActiveMillis >= consolidatedLastActiveMillis) consolidatedUser.lastActive = enrichedUser.lastActive;
-            } else {  // Update to the enriched last active time
-              consolidatedUser.lastActive = enrichedUser.lastActive;
-            }
-          }
-          // Consolidate groups
-          let consolidatedGroupsSet = consolidatedUser.groups && consolidatedUser.groups.groups ? new Set(consolidatedUser.groups.groups) : new Set();
-          let enrichedGroupsSet = enrichedUser.groups && enrichedUser.groups.groups ? new Set(enrichedUser.groups.groups) : new Set();
-          if (consolidatedUser.groups) {
-            consolidatedUser.groups.groups = Array.from(new Set([...consolidatedGroupsSet, ...enrichedGroupsSet]));
-          } else {
-            consolidatedUser.groups = new Object();
-            consolidatedUser.groups.groups = Array.from(new Set([...consolidatedGroupsSet, ...enrichedGroupsSet]));
-          }
-        } else {  // This email address has not been encountered yet
-          if (caseInsensitiveEmail) {
-            consolidatedEmailToUserAndGroupsMap.set(caseInsensitiveEmail, enrichedUser);
-          } else {
-            console.error('enrichEmailToUserAndGroupsMap(): user', user, 'does not have an email address!')
-          }
-        }
-      }
-    };
-    console.log('enrichEmailToUserAndGroupsMap(): enrichedEmailToUserAndGroupsMap:', enrichedEmailToUserAndGroupsMap);
-    console.log('enrichEmailToUserAndGroupsMap(): consolidatedEmailToUserAndGroupsMap:', consolidatedEmailToUserAndGroupsMap);
-    return { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap };
-  } catch (error) {
-    console.error('enrichEmailToUserAndGroupsMap():', error);
-  }
 }
 
 
@@ -621,7 +418,7 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
   for (const [email, user] of emailToUserAndGroupsMap) {
     let accountSet = new Set();
     if (!user.groups) {
-      console.error('buildEmailToAccountsMap(): User has no groups (check email case)', JSON.stringify(user, null, 4));
+      console.debug('buildEmailToAccountsMap(): User has no groups (check email case)', user.email);
     } else {
       for (const group of user.groups.groups) {
         // Check whether to ignore the group, continue if it is to be ignored
@@ -637,13 +434,13 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
                 accountSet.add(account);
               }
             } else if (role.organizationId) {
-              console.log('buildEmailToAccountsMap(): Role associated with an organization, not account', role);
+              console.debug('buildEmailToAccountsMap(): Role associated with an organization, not account', role);
             } else {
-              console.error('buildEmailToAccountsMap(): Role not associated with either an account or organization', role);
+              console.debug('buildEmailToAccountsMap(): Role not associated with either an account or organization', role);
             }
           }
         } else {
-          console.error('buildEmailToAccountsMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+          console.debug('buildEmailToAccountsMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group.displayName);
         }
       }
     }
@@ -658,7 +455,7 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
       if (caseInsensitiveEmail) {
         consolidatedEmailToAccountSetMap.set(caseInsensitiveEmail, accountSet);
       } else {
-        console.error("buildEmailToAccountsMap(): user has no email address!", user);
+        console.warn("buildEmailToAccountsMap(): user has no email address!");
       }
     }
   }
@@ -677,7 +474,7 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
   let ignoredGroups = [ %{~ for index_group, group in tf_showback_ignore_groups ~}%{ if index_group != 0 }, %{ endif }"${group}"%{~ endfor ~} ];
   for (const [email, user] of emailToUserAndGroupsMap) {
     if (!user.groups) {
-      console.log('buildEmailToAccountsMap(): User has no groups', JSON.stringify(user, null, 4));
+      console.debug('buildEmailToAccountsMap(): User has no groups', user.email);
       continue;
     }
     for (const group of user.groups.groups) {
@@ -695,13 +492,13 @@ function buildEmailToAccountsMap(emailToUserAndGroupsMap, groupIdToRolesMap, acc
               accountIdToUsersMap.set(role.accountId, new Set([user]));
             }
           } else if (role.organizationId) {
-            console.log('buildAccountToUsersMap(): Role associated with an organization, not account', role);
+            console.debug('buildAccountToUsersMap(): Role associated with an organization, not account', role.displayName);
           } else {
-            console.error('buildAccountToUsersMap(): Role not associated with either an account or organization', role);
+            console.debug('buildAccountToUsersMap(): Role not associated with either an account or organization', role.displayName);
           }
         }
       } else {
-        console.error('buildAccountToUsersMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group);
+        console.debug('buildAccountToUsersMap(): Group does not exist in groupIdToRolesMap.get(group.id)', group.displayName);
       }
     }
   }
@@ -741,7 +538,7 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
 
     // Handle users with no accounts
     if (accountSet.size == 0) {
-      console.error("buildDepartmentToUserTypeCountsMap: User has no accounts:", email);
+      console.debug("buildDepartmentToUserTypeCountsMap: User has no accounts:", email);
       for (const tier of tierSet) {
         tierToDeptSetMap.set(tier, new Set([DEPARTMENT_UNASSIGNED]));
       }
@@ -751,7 +548,7 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
     for (const [tier, deptSet] of tierToDeptSetMap) {
       departmentSet = new Set([...departmentSet, ...deptSet]);  // Combine departments
       if (deptSet.size == 1 && deptSet.has(DEPARTMENT_UNASSIGNED)) {
-        console.error("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email, "and tier:", tier);
+        console.debug("buildDepartmentToUserTypeCountsMap: Department undefined for user:", email, "and tier:", tier);
       }
     }
 
@@ -781,7 +578,7 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
       let proportion = 1/deptSet.size;
       if (proportion < 1) {
         // The user is a member of accounts under two or more different departments, so split equally
-        console.log("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments:", departmentSet, "apportioning equally across each department");
+        console.debug("buildDepartmentToUserTypeCountsMap():", email, "is in multiple departments, apportioning equally");
       }
 
       // Initialize, or update, an existing department's userCount
@@ -825,7 +622,7 @@ function buildDepartmentToUserTypeCountsMap(consolidatedEmailToAccountSetMap, co
  * @param {*} departmentToTierMap a map of departments to their tier.
  * @param {*} timestamp the metric timestamp.
  */
-function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, timestamp) {
+async function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departmentToTierMap, timestamp) {
   /*
    * Dimensional metrics
    */
@@ -885,7 +682,7 @@ function postDepartmentShowback(tierToDepartmentToUserTypeCountsMapMap, departme
     metrics.push(totalUserMetric);
   }
 
-  chunkAndPostMetrics(metrics);
+  await chunkAndPostMetrics(metrics);
 }
 
 
@@ -919,7 +716,7 @@ function getDimensionalMetricObject(name, type, value, timestamp, attributes) {
  *  * @param {*} timestamp the metric timestamp.
  * @returns an array of accounts.
  */
-function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
+async function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
   let accountArray = [];
   for (const [accountId, account] of accountIdToAccountMap) {
     let basicUserCount = 0, coreUserCount = 0, fullUserCount = 0;
@@ -938,7 +735,7 @@ function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
         }
       }
     } else if (account && !account.isCanceled) {
-      console.warn('postAccounts(): Account ' + account?.name + ' with id ' + accountId + ' has no users');
+      console.debug('postAccounts(): Account ' + account?.name + ' with id ' + accountId + ' has no users');
     }
     if (account && !account.isCanceled) {
       accountArray.push(
@@ -973,7 +770,7 @@ function postAccounts(accountToUsersMap, accountIdToAccountMap, timestamp) {
     let totalUserAccountMetric = getDimensionalMetricObject("${tf_metric_name_prefix}.account.totaluser.count", "gauge", totalUserAccountCount, timestamp,  { "account": account.account_name, "account_id": account.account_id });
     metrics.push(totalUserAccountMetric);
   }
-  chunkAndPostMetrics(metrics);
+  await chunkAndPostMetrics(metrics);
 
   return accountArray;
 }
@@ -1038,81 +835,6 @@ async function postCustomEvents(body) {
 
 
 /**
- * Get a map of auth domains to their groups.
- * @param {*} authDomainsArray an array of auth domains.
- * @returns a map of auth domains to their groups.
- */
-async function getAuthDomainToGroupsMap(authDomainsArray) {
-  const body = {
-    query: `
-      query ($authDomainId: [ID!], $groupsCursor: String) {
-        actor {
-          organization {
-            authorizationManagement {
-              authenticationDomains(id: $authDomainId) {
-                authenticationDomains {
-                  groups(cursor: $groupsCursor) {
-                    groups {
-                      displayName
-                      id
-                    }
-                    nextCursor
-                  }
-                  id
-                  name
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    variables: {
-      "authDomainId": null,
-      "groupsCursor": null
-    }
-  }
-  const options = {
-    url: nerdGraphEndpoint,
-    headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    retry: { // By default, Got does not retry on POST
-      limit: MAX_RETRIES,
-      methods: ['POST']
-    }
-  };
-
-  try {
-    let authDomainToGroupsMap = new Map();
-    for (const authDomain of authDomainsArray) {
-      let groups = [];
-      do {
-        body.variables.authDomainId = authDomain.id;
-        options.body = JSON.stringify(body);
-        console.debug('getAuthDomainToGroupsMap() postWithRetries', authDomain.name);
-        let response = await postWithRetries(options);
-        let responseBody = JSON.parse(response.body);
-        if (responseBody.hasOwnProperty('errors')) {
-          console.error(responseBody.errors);
-        }
-        groups = groups.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups);
-        body.variables.groupsCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.nextCursor;
-        options.body = JSON.stringify(body);
-      } while (body.variables.groupsCursor)
-      // Set the groups for the auth domain
-      authDomainToGroupsMap.set(authDomain.id, groups);
-    };
-    return authDomainToGroupsMap;
-  } catch (error) {
-    console.error('getAuthDomainToGroupsMap():', error);
-  }
-}
-
-
-/**
  * Get an array of auth domains for the organization.
  * @returns an array of auth domains.
  */
@@ -1142,7 +864,7 @@ async function getAuthDomainsArray() {
   const options = {
     url: nerdGraphEndpoint,
     headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
+      'API-key': $secure.SHOWBACK_QUERY_USER_API_KEY,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -1173,93 +895,305 @@ async function getAuthDomainsArray() {
 
 
 /**
- * Delay (sleep) by a number of milliseconds.
- * @param {*} milliseconds number of milliseconds to wait for.
- * @returns 
+ * Wrap $http.post with a configurable number of retries.
+ * @param {*} options the post options.
+ * @returns the response.
  */
-function delay(milliseconds) {
-  return new Promise(resolve => setTimeout(resolve, milliseconds));
-}
-
-
-/**
- * Get a map of groups by id to their roles.
- * @param {*} authDomainsToGroupsMap a map of auth domains to their groups.
- * @returns a map of groups by id to their roles.
- */
-async function getGroupIdToRolesMap(authDomainsToGroupsMap) {
-  try {
-    // I'm fairly certain that group/role/account is a triplet, that is a group only has one role per account, but the API suggests that might change
-    let groupIdToRolesMap = new Map();
-    for (const authDomain of authDomainsToGroupsMap.keys()) {
-      let groupsArray = authDomainsToGroupsMap.get(authDomain);
-
-      // Chunk array before querying to avoid hitting the GraphQL API request limit
-      let chunkedGroupsArray = [];
-      Array.from({length: Math.ceil(groupsArray.length / GQL_API_CHUNK_SIZE)}, (val, i) => {
-        chunkedGroupsArray.push(groupsArray.slice(i * GQL_API_CHUNK_SIZE, i * GQL_API_CHUNK_SIZE + GQL_API_CHUNK_SIZE))
-      });
-
-      // Run the chunked queries in parallel
-      for (const chunkedGroups of chunkedGroupsArray) {  // Blocking
-        let promises = [];
-        for (const group of chunkedGroups) {
-          promises.push(getGroupIdAndRolesObjectWithRetries(authDomain, group));
-        };
-        // Await all promises  
-        let groupIdAndRolesArray = await Promise.all(promises);
-        for (const groupIdAndRolesObject of groupIdAndRolesArray) {
-          groupIdToRolesMap.set(groupIdAndRolesObject.groupId, groupIdAndRolesObject.roles);
-        }
-        // Wait 0.05 seconds before issuing queries for the next chunk of groups, to avoid hitting the NerdGraph query limit
-        await delay(50);
+async function postWithRetries(options) {
+  let success = false;
+  let response;
+  let retries = 0;
+  let currentError;
+  do {
+    try {
+      response = await $http.post(options);
+      let responseBody = JSON.parse(response.body);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error("postWithRetries(): API error (retry " + retries + "/" + MAX_RETRIES + "):", JSON.stringify(responseBody.errors).substring(0, 200));
+        currentError = responseBody.errors;
+        retries++;
+      } else {
+        success = true;
       }
-    };
-    return groupIdToRolesMap;
-  } catch (error) {
-    console.error('getGroupIdToRolesMap():', error);
+    } catch (error) {
+      console.error("postWithRetries(): request error (retry " + retries + "/" + MAX_RETRIES + "):", error.code || error.message);
+      currentError = error;
+      retries++;
+    }
+  } while (!success && retries <= MAX_RETRIES);
+  if (success) {
+    return response;
+  } else {
+    console.error("postWithRetries(): max retries exceeded:", MAX_RETRIES);
+    throw currentError;
   }
 }
 
 
 /**
- * Get an object relating a group id to its roles. A wrapper function that retries if the getGroupIdAndRolesObject() function errors.
- * @param {*} authDomain authentication domain for the supplied group.
- * @param {*} group group for which roles are to be retrieved.
- * @returns an object relating a group id to its roles { groupId: group.id, roles: roles}.
+ * Fetch all users with full details (type, lastActive) AND group memberships in a single query per auth domain.
+ * Replaces: getGroupIdToGroupAndUsersMap, getGroupUsersByCursor, enrichEmailToUserAndGroupsMap, buildEmailToUserAndGroupsMap.
+ * Processes auth domains sequentially to keep peak memory to one domain's data at a time.
+ * @param {*} authDomainsArray an array of auth domains.
+ * @returns {Object} { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap, allGroupIds }
  */
-async function getGroupIdAndRolesObjectWithRetries(authDomain, group) {
-    let success = false;
-    let groupIdAndRolesObject;
-    let retries = 0;
-    let currentError;
-    do {
-      try {
-        groupIdAndRolesObject = await getGroupIdAndRolesObject(authDomain, group);
-        success = true;
-      } catch (error) {
-        console.error("getGroupIdAndRolesObjectWithRetries(): An error occurred:", error);
-        console.error("getGroupIdAndRolesObjectWithRetries(): retry count:", retries);
-        currentError = error;
-        retries++;
+async function getAllUsersWithGroups(authDomainsArray) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $usersCursor: String) {
+        actor {
+          organization {
+            userManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  users(cursor: $usersCursor) {
+                    nextCursor
+                    users {
+                      email
+                      id
+                      lastActive
+                      name
+                      timeZone
+                      type { id, displayName }
+                      groups {
+                        groups { id, displayName }
+                        nextCursor
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
-    } while (!success && retries <= MAX_RETRIES);
-    if (success) {
-      return groupIdAndRolesObject;
-    } else {
-      console.error("getGroupIdAndRolesObjectWithRetries(): max retries exceeded:", MAX_RETRIES);
-      throw currentError;
-    }
+    `,
+    variables: { "authDomainId": null, "usersCursor": null }
+  };
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: { 'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY, 'Content-Type': 'application/json' },
+    body: null,
+    retry: { limit: MAX_RETRIES, methods: ['POST'] }
+  };
+
+  let enrichedEmailToUserAndGroupsMap = new Map();
+  let consolidatedEmailToUserAndGroupsMap = new Map();
+  let allGroupIds = new Set();
+
+  // Process each auth domain sequentially
+  for (const authDomain of authDomainsArray) {
+    body.variables.authDomainId = authDomain.id;
+    body.variables.usersCursor = null;
+    options.body = JSON.stringify(body);
+
+    do {
+      let response = await postWithRetries(options);
+      let responseBody = JSON.parse(response.body);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error(responseBody.errors);
+      }
+      let users = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.users;
+
+      for (const user of users) {
+        // Collect all group IDs for Phase 3 (group-role fetching)
+        if (user.groups?.groups) {
+          for (const group of user.groups.groups) {
+            allGroupIds.add(group.id);
+          }
+        }
+
+        // Build enriched map (case-sensitive email)
+        if (user.email) {
+          let existingUser = enrichedEmailToUserAndGroupsMap.get(user.email);
+          if (existingUser) {
+            // Merge groups from this auth domain
+            if (user.groups?.groups && existingUser.groups?.groups) {
+              for (const g of user.groups.groups) {
+                if (!existingUser.groups.groups.some(eg => eg.id === g.id)) {
+                  existingUser.groups.groups.push(g);
+                }
+              }
+            }
+          } else {
+            // Normalize groups structure to match downstream expectations
+            user.groups = user.groups || { groups: [] };
+            user.groups.groups = user.groups.groups || [];
+            enrichedEmailToUserAndGroupsMap.set(user.email, user);
+          }
+        }
+
+        // Build consolidated map (case-insensitive email)
+        let caseInsensitiveEmail = user.email?.toLowerCase();
+        if (consolidatedEmailToUserAndGroupsMap.has(caseInsensitiveEmail)) {
+          let consolidatedUser = consolidatedEmailToUserAndGroupsMap.get(caseInsensitiveEmail);
+          consolidatedUser.email = caseInsensitiveEmail;
+          // Consolidate user type (Full > Core > Basic)
+          if (consolidatedUser.type.displayName == 'Basic' && user.type.displayName == 'Core') {
+            consolidatedUser.type = user.type;
+            consolidatedUser.id = user.id;
+            consolidatedUser.name = user.name;
+            consolidatedUser.timeZone = user.timeZone;
+          } else if ((consolidatedUser.type.displayName == 'Basic' || consolidatedUser.type.displayName == 'Core') && user.type.displayName == 'Full platform') {
+            consolidatedUser.type = user.type;
+            consolidatedUser.id = user.id;
+            consolidatedUser.name = user.name;
+            consolidatedUser.timeZone = user.timeZone;
+          }
+          // Consolidate lastActive
+          if (user.lastActive) {
+            if (consolidatedUser.lastActive) {
+              if (new Date(user.lastActive).getTime() >= new Date(consolidatedUser.lastActive).getTime()) {
+                consolidatedUser.lastActive = user.lastActive;
+              }
+            } else {
+              consolidatedUser.lastActive = user.lastActive;
+            }
+          }
+          // Consolidate groups
+          if (user.groups?.groups) {
+            consolidatedUser.groups = consolidatedUser.groups || { groups: [] };
+            consolidatedUser.groups.groups = consolidatedUser.groups.groups || [];
+            for (const g of user.groups.groups) {
+              if (!consolidatedUser.groups.groups.some(eg => eg.id === g.id)) {
+                consolidatedUser.groups.groups.push(g);
+              }
+            }
+          }
+        } else if (caseInsensitiveEmail) {
+          user.groups = user.groups || { groups: [] };
+          user.groups.groups = user.groups.groups || [];
+          consolidatedEmailToUserAndGroupsMap.set(caseInsensitiveEmail, user);
+        }
+      }
+
+      body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].users.nextCursor;
+      options.body = JSON.stringify(body);
+    } while (body.variables.usersCursor);
+  }
+
+  return { enrichedEmailToUserAndGroupsMap, consolidatedEmailToUserAndGroupsMap, allGroupIds };
 }
 
 
 /**
- * Get an object relating a group id to its roles.
- * @param {*} authDomain authentication domain for the supplied group.
- * @param {*} group group for which roles are to be retrieved.
- * @returns an object relating a group id to its roles { groupId: group.id, roles: roles}.
+ * Fetch group-to-role mappings using batched group IDs (all at once per auth domain).
+ * Replaces: getAuthDomainToGroupsMap, getGroupIdToRolesMap, getGroupIdAndRolesObject, getGroupIdAndRolesObjectWithRetries.
+ * @param {*} authDomainsArray an array of auth domains.
+ * @param {*} allGroupIds a Set of all group IDs that need role lookups.
+ * @returns a map of group IDs to their roles arrays.
  */
-async function getGroupIdAndRolesObject(authDomain, group) {
+async function getBatchedGroupRoles(authDomainsArray, allGroupIds) {
+  const body = {
+    query: `
+      query ($authDomainId: [ID!], $groupIds: [ID!], $groupsCursor: String) {
+        actor {
+          organization {
+            authorizationManagement {
+              authenticationDomains(id: $authDomainId) {
+                authenticationDomains {
+                  groups(id: $groupIds, cursor: $groupsCursor) {
+                    groups {
+                      id
+                      displayName
+                      roles {
+                        roles {
+                          accountId
+                          type
+                          roleId
+                          organizationId
+                          name
+                          id
+                          displayName
+                        }
+                        nextCursor
+                      }
+                    }
+                    nextCursor
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `,
+    variables: { "authDomainId": null, "groupIds": null, "groupsCursor": null }
+  };
+  const options = {
+    url: nerdGraphEndpoint,
+    headers: { 'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY, 'Content-Type': 'application/json' },
+    body: null,
+    retry: { limit: MAX_RETRIES, methods: ['POST'] }
+  };
+
+  let groupIdToRolesMap = new Map();
+  let groupIdsArray = Array.from(allGroupIds);
+  let apiCallCount = 0;
+  let rolePaginationCount = 0;
+
+  // Process each auth domain sequentially
+  for (const authDomain of authDomainsArray) {
+    let domainPageCount = 0;
+    body.variables.authDomainId = authDomain.id;
+    body.variables.groupIds = groupIdsArray;
+    body.variables.groupsCursor = null;
+    options.body = JSON.stringify(body);
+
+    // Paginate through groups in the response
+    do {
+      apiCallCount++;
+      domainPageCount++;
+      let response = await postWithRetries(options);
+      let responseBody = JSON.parse(response.body);
+      if (responseBody.hasOwnProperty('errors')) {
+        console.error(responseBody.errors);
+      }
+      let authDomains = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains;
+      if (!authDomains || authDomains.length === 0) break;
+
+      let groupsData = authDomains[0].groups;
+      if (domainPageCount <= 3 || !groupsData.nextCursor) {
+        console.debug('[TIMING] getBatchedGroupRoles: page ' + domainPageCount + ' returned ' + groupsData.groups.length + ' groups, nextCursor=' + (groupsData.nextCursor ? 'yes' : 'null'));
+      }
+      for (const group of groupsData.groups) {
+        let roles = group.roles?.roles || [];
+
+        // Handle role pagination for groups with many roles
+        if (group.roles?.nextCursor) {
+          rolePaginationCount++;
+          roles = await paginateGroupRoles(authDomain.id, group.id, roles, group.roles.nextCursor);
+        }
+
+        // Merge roles if group was already seen in another auth domain
+        if (groupIdToRolesMap.has(group.id)) {
+          let existing = groupIdToRolesMap.get(group.id);
+          groupIdToRolesMap.set(group.id, existing.concat(roles));
+        } else {
+          groupIdToRolesMap.set(group.id, roles);
+        }
+      }
+
+      body.variables.groupsCursor = groupsData.nextCursor;
+      options.body = JSON.stringify(body);
+    } while (body.variables.groupsCursor);
+    console.debug('[TIMING] getBatchedGroupRoles: domain ' + authDomain.name + ': ' + domainPageCount + ' pages, ' + groupIdToRolesMap.size + ' groups mapped so far (requested ' + groupIdsArray.length + ' IDs)');
+  }
+  console.debug('[TIMING] getBatchedGroupRoles: ' + apiCallCount + ' API calls + ' + rolePaginationCount + ' role pagination calls');
+
+  return groupIdToRolesMap;
+}
+
+
+/**
+ * Paginate through remaining roles for a specific group.
+ * @param {*} authDomainId the auth domain ID.
+ * @param {*} groupId the group ID.
+ * @param {*} existingRoles roles already fetched.
+ * @param {*} cursor the roles nextCursor.
+ * @returns the complete roles array.
+ */
+async function paginateGroupRoles(authDomainId, groupId, existingRoles, cursor) {
   const body = {
     query: `
       query ($authDomainId: [ID!], $groupId: [ID!], $rolesCursor: String) {
@@ -1282,8 +1216,6 @@ async function getGroupIdAndRolesObject(authDomain, group) {
                         }
                         nextCursor
                       }
-                      displayName
-                      id
                     }
                   }
                 }
@@ -1293,282 +1225,29 @@ async function getGroupIdAndRolesObject(authDomain, group) {
         }
       }
     `,
-    variables: {
-      "authDomainId": null,
-      "groupId": null,
-      "rolesCursor": null
-    }
-  }
+    variables: { "authDomainId": authDomainId, "groupId": groupId, "rolesCursor": cursor }
+  };
   const options = {
     url: nerdGraphEndpoint,
-    headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    retry: { // By default, Got does not retry on POST
-      limit: MAX_RETRIES,
-      methods: ['POST']
-    }
+    retry: { limit: MAX_RETRIES, methods: ['POST'] }
   };
 
-  return new Promise(async (resolve, reject) => {
-    try {
-      let roles = [];
-      body.variables.authDomainId = authDomain;
-      body.variables.groupId = group.id;
-      options.body = JSON.stringify(body);
-      let errorMessage = null;
-      do {
-        console.debug('getGroupIdAndRolesObject() postWithRetries', authDomain, group.displayName, body.variables.rolesCursor);
-        let response = await postWithRetries(options);
-        let responseBody = JSON.parse(response.body);
-        if (responseBody.hasOwnProperty('errors')) {
-          errorMessage = responseBody.errors; 
-          console.error("getGroupIdAndRolesObject(): Errors present in response.body");
-          break;
-        }
-        roles = roles.concat(responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.roles);
-        body.variables.rolesCursor = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].roles.nextCursor;
-        options.body = JSON.stringify(body);
-      } while (body.variables.rolesCursor)
-      if (errorMessage) {
-        console.error('getGroupIdAndRolesObject():', errorMessage, authDomain, group.displayName);
-        reject(errorMessage);
-      } else {
-        let hasAccount = false;
-        for (const role of roles) {
-          if (role.accountId) {
-            hasAccount = true;
-            break;
-          }
-        }
-        if (!hasAccount) {
-          console.error('getGroupIdAndRolesObject(): group has no accounts', group);
-        }
-        resolve({ groupId: group.id, roles: roles});
-      }
-    } catch (error) {
-      console.error('getGroupIdAndRolesObject():', error, authDomain, group.displayName);
-      reject(error);
-    }
-  })
-}
-
-
-/**
- * Get a map of groups by id to their group and users.
- * @param {*} authDomainsArray an array of auth domains
- * @returns a map of groups by id to their group and users.
- */
-async function getGroupIdToGroupAndUsersMap(authDomainsArray) {
-  const body = {
-    query: `
-      query ($authDomainId: [ID!], $groupsCursor: String) {
-        actor {
-          organization {
-            userManagement {
-              authenticationDomains(id: $authDomainId) {
-                authenticationDomains {
-                  groups(cursor: $groupsCursor) {
-                    groups {
-                      id
-                      users {
-                        users {
-                          id
-                          email
-                          name
-                          timeZone
-                        }
-                        nextCursor
-                      }
-                      displayName
-                    }
-                    nextCursor
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    variables: {
-      "authDomainId": null,
-      "groupsCursor": null
-    }
-  }
-  const options = {
-    url: nerdGraphEndpoint,
-    headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(),
-    retry: { // By default, Got does not retry on POST
-      limit: MAX_RETRIES,
-      methods: ['POST']
-    }
-  };
-
-  try {
-    let groupIdToGroupAndUsersMap = new Map();
-    for (const authDomain of authDomainsArray) {
-      body.variables.authDomainId = authDomain.id;
-      options.body = JSON.stringify(body);
-      console.log('getGroupIdToGroupAndUsersMap(): authDomain.id:', authDomain.id);
-      let groups = [];
-      do {
-        console.debug('getGroupIdToGroupAndUsersMap() postWithRetries, Auth Domain:' + authDomain.name);
-        let response = await postWithRetries(options);
-        console.log('getGroupIdToGroupAndUsersMap(): options:', options);
-        let responseBody = JSON.parse(response.body);
-        if (responseBody.hasOwnProperty('errors')) {
-          console.error(responseBody.errors);
-        }
-        let groupsArray = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups;
-        groups = groups.concat(groupsArray);
-        body.variables.groupsCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.nextCursor;
-        options.body = JSON.stringify(body);
-        // Filter groups with user pagination
-        const groupsWithNextCursorUser = groups.filter(group => {
-          return group.users ? group.users.nextCursor : null;  // Groups may have zero users
-        })
-        for (const group of groupsWithNextCursorUser) { // Ghastly nested pagination in the GraphQL! :O
-          let users = group.users.users;
-          if (group.users.nextCursor) {
-            users = await getGroupUsersByCursor(authDomain.id, group);
-          }
-          group.users.users = users;
-        }
-      } while (body.variables.groupsCursor)
-      for (const group of groups) {
-        groupIdToGroupAndUsersMap.set(group.id, group);
-      }
-      console.log('getGroupIdToGroupAndUsersMap(): groupIdToGroupAndUsersMap:', groupIdToGroupAndUsersMap);
-    };
-    return groupIdToGroupAndUsersMap;
-  } catch (error) {
-    console.error('getGroupIdToGroupAndUsersMap():', error);
-  }
-}
-
-
-/**
- * Get group users for the supplied auth domain and group.
- * @param {*} authDomainId the auth domain id.
- * @param {*} group the group.
- * @returns group users for the supplied auth domain and group.
- */
-async function getGroupUsersByCursor(authDomainId, group) {
-  const body = {
-    query: `
-      query ($authDomainId: [ID!], $groupId: [ID!], $usersCursor: String) {
-        actor {
-          organization {
-            userManagement {
-              authenticationDomains(id: $authDomainId) {
-                authenticationDomains {
-                  groups(id: $groupId) {
-                    groups {
-                      users (cursor: $usersCursor) {
-                        users {
-                          id
-                          email
-                          name
-                          timeZone
-                        }
-                        nextCursor
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    variables: {
-      "authDomainId": null,
-      "groupId": null,
-      "usersCursor": null
-    }
-  }
-  const options = {
-    url: nerdGraphEndpoint,
-    headers: {
-      'Api-Key': $secure.SHOWBACK_QUERY_USER_API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    retry: { // By default, Got does not retry on POST
-      limit: MAX_RETRIES,
-      methods: ['POST']
-    }
-  };
-
-  try {
-    let users = group.users.users;
-    body.variables.authDomainId = authDomainId;
-    body.variables.groupId = group.id;
-    body.variables.usersCursor = group.users.nextCursor;
-    options.body = JSON.stringify(body);
-    do {
-      console.debug('getGroupUsersByCursor() postWithRetries for Auth Domain Id:' + authDomainId + ', and group: ' + group.displayName);  //
-      let response = await postWithRetries(options);
-      let responseBody = JSON.parse(response.body);
-      if (responseBody.hasOwnProperty('errors')) {
-        console.error(responseBody.errors);
-      }
-      users = users.concat(responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.users);
-      body.variables.usersCursor = responseBody.data.actor.organization.userManagement.authenticationDomains.authenticationDomains[0].groups.groups[0].users.nextCursor;
-      options.body = JSON.stringify(body);
-      console.debug('getGroupUsersByCursor() postWithRetries for Auth Domain Id: ' + authDomainId + ', and group: ' + group.displayName + ', and usersCursor: ' + body.variables.usersCursor);
-    } while (body.variables.usersCursor)
-    return users;
-  } catch (error) {
-    console.error('getGroupUsersByCursor():', error)
-  }
-}
-
-
-/**
- * Wrap $http.post with a configurable number of retries.
- * @param {*} options the post options.
- * @returns the response.
- */
-async function postWithRetries(options) {
-  let success = false;
-  let response;
-  let retries = 0;
-  let currentError;
+  let roles = existingRoles;
   do {
-    try {
-      response = await got.post(options);
-      let responseBody = JSON.parse(response.body);
-      if (responseBody.hasOwnProperty('errors')) {
-        console.error(responseBody.errors);
-        console.error("postWithRetries(): An error occurred:", responseBody.errors);
-        console.error("postWithRetries(): retry count:", retries);
-        currentError = responseBody.errors;
-        retries++;
-      } else {
-        success = true;
-      }
-    } catch (error) {
-      console.error("postWithRetries(): An error occurred:", error);
-      console.error("postWithRetries(): retry count:", retries);
-      currentError = error;
-      retries++;
+    let response = await postWithRetries(options);
+    let responseBody = JSON.parse(response.body);
+    if (responseBody.hasOwnProperty('errors')) {
+      console.error(responseBody.errors);
     }
-  } while (!success && retries <= MAX_RETRIES);
-  if (success) {
-    return response;
-  } else {
-    console.error("postWithRetries(): max retries exceeded:", MAX_RETRIES);
-    throw currentError;
-  }
+    let groupData = responseBody.data.actor.organization.authorizationManagement.authenticationDomains.authenticationDomains[0].groups.groups[0];
+    roles = roles.concat(groupData.roles.roles);
+    body.variables.rolesCursor = groupData.roles.nextCursor;
+    options.body = JSON.stringify(body);
+  } while (body.variables.rolesCursor);
+
+  return roles;
 }
 
 
